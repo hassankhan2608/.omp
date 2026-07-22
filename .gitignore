@@ -21,3 +21,6 @@ agent/last-changelog-version
 **/node_modules/
 **/index.js
 **/*.tsbuildinfo
+
+# Secrets
+.env

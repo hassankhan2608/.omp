@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/omp-terminal-bell/config.schema.json",
+  "title": "OMP Terminal Bell Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "enabled": { "type": "boolean", "default": true },
+    "debounceMs": { "type": "integer", "minimum": 0, "default": 500 },
+    "focusTerminal": {
+      "type": "boolean",
+      "default": false,
+      "description": "Write ASCII BEL to OMP's terminal after starting a sound."
+    },
+    "sounds": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Filename under sounds/, or an absolute path."
+          }
+        },
+        "required": ["enabled", "file"]
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent.complete": { "type": "string", "minLength": 1 },
+        "approval.requested": { "type": "string", "minLength": 1 },
+        "agent.error": { "type": "string", "minLength": 1 }
+      },
+      "required": ["agent.complete", "approval.requested", "agent.error"]
+    }
+  },
+  "required": ["enabled", "debounceMs", "focusTerminal", "sounds", "events"]
+}

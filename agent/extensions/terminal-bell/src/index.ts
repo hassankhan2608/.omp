@@ -30,15 +30,32 @@ export function classifyAgentEnd(event: AgentEndLike): BellEvent | undefined {
   return reason === "error" ? "agent.error" : "agent.complete";
 }
 
-export default function terminalBell(pi: ExtensionAPI): void {
-  const notifier = loadConfig(EXTENSION_DIR)
-    .then((config) => new TerminalNotifier(config, EXTENSION_DIR))
-    .catch((error: unknown) => {
-      pi.logger.error("Terminal bell config failed to load", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    });
+interface BellNotifier {
+  notify(event: BellEvent): Promise<boolean>;
+}
+
+export function registerBellHandlers(
+  pi: ExtensionAPI,
+  notifier: Promise<BellNotifier | undefined>,
+): void {
+  let listeningForCustomApprovals = false;
+  const customApprovalListener = () => {
+    void notifier
+      .then((resolved) => resolved?.notify("approval.requested"))
+      .catch(() => undefined);
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    if (!ctx.hasUI || listeningForCustomApprovals) return;
+    process.on("omp:approval-requested", customApprovalListener);
+    listeningForCustomApprovals = true;
+  });
+
+  pi.on("session_shutdown", () => {
+    if (!listeningForCustomApprovals) return;
+    process.off("omp:approval-requested", customApprovalListener);
+    listeningForCustomApprovals = false;
+  });
 
   pi.on("agent_end", async (event, ctx) => {
     if (!ctx.hasUI) return;
@@ -50,4 +67,16 @@ export default function terminalBell(pi: ExtensionAPI): void {
     if (!ctx.hasUI) return;
     await (await notifier)?.notify("approval.requested");
   });
+}
+
+export default function terminalBell(pi: ExtensionAPI): void {
+  const notifier = loadConfig(EXTENSION_DIR)
+    .then((config) => new TerminalNotifier(config, EXTENSION_DIR))
+    .catch((error: unknown) => {
+      pi.logger.error("Terminal bell config failed to load", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    });
+  registerBellHandlers(pi, notifier);
 }

@@ -61,6 +61,12 @@ export async function requestApproval(ctx: ExtensionContext, request: ApprovalRe
   try {
     const forwarded = !ctx.hasUI;
     const heading = forwarded ? `Subagent ${request.principal}: ${request.title}` : request.title;
+    process.emit("omp:approval-requested", {
+      source: "bash-policy",
+      title: heading,
+      description: request.description,
+      principal: request.principal,
+    });
     const choice = await ui.select(
       `${heading}\n${request.description}`,
       [

@@ -1,16 +1,18 @@
 # OMP Terminal Bell
 
-A standalone OMP extension that ports the notification behavior from `~/.opencode/plugin/terminal-bell` without coupling it to `bash-policy`.
+A standalone OMP extension that ports the notification behavior from `~/.opencode/plugin/terminal-bell` without embedding audio playback in `bash-policy`.
 
 ## Behavior
 
 | OMP signal | Config key | Default sound |
 |---|---|---|
 | A visible agent run settles successfully | `agent.complete` | `complete.oga` |
-| OMP opens a tool approval prompt | `approval.requested` | `minecraft_item_drop.mp3` |
+| OMP or `bash-policy` opens a tool approval prompt | `approval.requested` | `minecraft_item_drop.mp3` |
 | A visible agent run settles with `stopReason: "error"` | `agent.error` | `message.oga` |
 
 Completion uses OMP's `agent_end` event because it runs after the main-session stop hooks and exposes `willContinue`. Automatic continuations do not ring early. Aborted runs and headless subagents are intentionally silent.
+
+Native OMP approvals use `tool_approval_requested`. The custom `bash-policy` prompt emits `omp:approval-requested` immediately before opening its selector. The bell listener starts detached notification work and returns without delaying the prompt or consuming the command timeout.
 
 Notifications share one debounce window. Audio playback is detached and advisory: a missing audio player never interrupts OMP. Linux uses `paplay`, macOS uses `afplay`, and Windows uses PowerShell `Media.SoundPlayer`.
 

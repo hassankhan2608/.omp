@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { DEFAULT_CONFIG, loadConfig, type BellConfig } from "../src/config";
-import { classifyAgentEnd } from "../src/index";
+import { classifyAgentEnd, registerBellHandlers } from "../src/index";
 import { buildPlayCommand, TerminalNotifier } from "../src/notifier";
 
 const temporaryDirectories: string[] = [];
@@ -66,6 +67,34 @@ describe("OMP event mapping", () => {
     expect(classifyAgentEnd({ messages: [{ role: "assistant", stopReason: "error" }] })).toBe("agent.error");
     expect(classifyAgentEnd({ messages: [{ role: "assistant", stopReason: "stop" }], willContinue: true })).toBeUndefined();
     expect(classifyAgentEnd({ messages: [{ role: "assistant", stopReason: "aborted" }] })).toBeUndefined();
+  });
+
+  test("rings for Bash policy asks only while an interactive session is active", async () => {
+    type Handler = (event: unknown, ctx: { hasUI: boolean }) => unknown;
+    const handlers = new Map<string, Handler>();
+    const pi = {
+      on: (event: string, handler: unknown) => handlers.set(event, handler as Handler),
+    } as unknown as ExtensionAPI;
+    const notifications: string[] = [];
+    registerBellHandlers(pi, Promise.resolve({
+      notify: async (event) => {
+        notifications.push(event);
+        return true;
+      },
+    }));
+
+    await handlers.get("session_start")?.({}, { hasUI: true });
+    process.emit("omp:approval-requested", { source: "bash-policy" });
+    await Promise.resolve();
+    expect(notifications).toEqual(["approval.requested"]);
+
+    await handlers.get("tool_approval_requested")?.({}, { hasUI: true });
+    expect(notifications).toEqual(["approval.requested", "approval.requested"]);
+
+    await handlers.get("session_shutdown")?.({}, { hasUI: true });
+    process.emit("omp:approval-requested", { source: "bash-policy" });
+    await Promise.resolve();
+    expect(notifications).toHaveLength(2);
   });
 });
 

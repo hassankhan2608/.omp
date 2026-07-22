@@ -365,8 +365,18 @@ describe("runtime integration", () => {
 
   test("forwards a headless subagent ask to the parent UI", async () => {
     const cwd = await temporaryDirectory();
+    let approvalNotification: unknown;
+    process.once("omp:approval-requested", (notification) => {
+      approvalNotification = notification;
+    });
     const prompts: string[] = [];
     const parent = context("parent-forward", cwd, true, async (prompt) => {
+      expect(approvalNotification).toMatchObject({
+        source: "bash-policy",
+        title: "Subagent scout: Allow bash?",
+        description: "git commit -m x",
+        principal: "scout",
+      });
       prompts.push(prompt);
       return "Approve once";
     });

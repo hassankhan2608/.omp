@@ -1,0 +1,12 @@
+symbolPreset: nerd
+theme: 
+  dark: anthracite
+setupVersion: 1
+modelRoles: 
+  vision: google-antigravity/gemini-3.1-flash-lite
+  smol: opencode-zen/mimo-v2.5-free:medium
+  default: opencode-zen/deepseek-v4-flash-free
+lsp: 
+  formatOnWrite: true
+defaultThinkingLevel: auto
+hideThinkingBlock: false

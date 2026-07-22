@@ -1,0 +1,23 @@
+# Runtime logs and process state
+logs/
+run/
+
+# Session and terminal history
+agent/sessions/
+agent/terminal-sessions/
+agent/cache/
+
+# Live SQLite state and model caches
+agent/*.db
+agent/*.db-shm
+agent/*.db-wal
+
+# Machine-local identifiers and update state
+install-id
+gpu_cache.json
+agent/last-changelog-version
+
+# Installed dependencies and generated output
+**/node_modules/
+**/index.js
+**/*.tsbuildinfo

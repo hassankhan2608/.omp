@@ -1,0 +1,434 @@
+{
+  "$schema": "./config.schema.json",
+  "hideDeniedTools": true,
+  "bashSafety": {
+    "customEnvironment": "ask",
+    "pty": "ask",
+    "commands": {
+      "find": [
+        {
+          "policy": "ask",
+          "reason": "find can write result data or delete matching paths",
+          "arguments": ["-delete", "-fprint", "-fprint0", "-fprintf", "-fls"]
+        },
+        {
+          "policy": "ask",
+          "reason": "find can execute commands for matching paths",
+          "arguments": ["-exec", "-execdir", "-ok", "-okdir"]
+        },
+        {
+          "policy": "ask",
+          "reason": "find can follow symbolic links",
+          "arguments": ["-follow"],
+          "shortFlags": ["L"]
+        }
+      ],
+      "fd": [
+        {
+          "policy": "ask",
+          "reason": "fd can execute commands for search results",
+          "arguments": ["--exec", "--exec-batch"],
+          "argumentPrefixes": ["--exec=", "--exec-batch="],
+          "shortFlags": ["x", "X"]
+        },
+        {
+          "policy": "ask",
+          "reason": "fd can include hidden paths",
+          "arguments": ["--hidden"],
+          "shortFlags": ["H"]
+        },
+        {
+          "policy": "ask",
+          "reason": "fd can follow symbolic links",
+          "arguments": ["--follow"],
+          "shortFlags": ["L"]
+        }
+      ],
+      "rg": [
+        {
+          "policy": "ask",
+          "reason": "ripgrep can preprocess files with an external command",
+          "arguments": ["--pre", "--pre-glob"],
+          "argumentPrefixes": ["--pre=", "--pre-glob="]
+        },
+        {
+          "policy": "ask",
+          "reason": "ripgrep can search compressed archives",
+          "arguments": ["--search-zip"],
+          "shortFlags": ["z"]
+        },
+        {
+          "policy": "ask",
+          "reason": "ripgrep can include hidden paths",
+          "arguments": ["--hidden"],
+          "shortFlags": ["."]
+        },
+        {
+          "policy": "ask",
+          "reason": "ripgrep can bypass ignore-file boundaries",
+          "arguments": ["--no-ignore"],
+          "argumentPrefixes": ["--no-ignore-"]
+        },
+        {
+          "policy": "ask",
+          "reason": "ripgrep can follow symbolic links",
+          "arguments": ["--follow"],
+          "shortFlags": ["L"]
+        }
+      ],
+      "grep": [
+        {
+          "policy": "ask",
+          "reason": "grep can recursively traverse directories",
+          "arguments": ["--recursive", "--dereference-recursive"],
+          "shortFlags": ["r", "R"]
+        }
+      ],
+      "ag": [
+        {
+          "policy": "ask",
+          "reason": "the silver searcher can include hidden or ignored paths",
+          "arguments": ["--hidden", "--unrestricted"],
+          "shortFlags": ["u"]
+        },
+        {
+          "policy": "ask",
+          "reason": "the silver searcher can follow symbolic links",
+          "arguments": ["--follow"],
+          "shortFlags": ["f"]
+        },
+        {
+          "policy": "ask",
+          "reason": "the silver searcher can execute an external pager",
+          "arguments": ["--pager"],
+          "argumentPrefixes": ["--pager="]
+        }
+      ],
+      "ack": [
+        {
+          "policy": "ask",
+          "reason": "ack can execute an external pager",
+          "arguments": ["--pager"],
+          "argumentPrefixes": ["--pager="]
+        }
+      ],
+      "file": [
+        {
+          "policy": "ask",
+          "reason": "file can compile a magic database",
+          "arguments": ["--compile"],
+          "shortFlags": ["C"]
+        }
+      ],
+      "less": [
+        {
+          "policy": "ask",
+          "reason": "less can write its input to a log file",
+          "arguments": ["--log-file"],
+          "argumentPrefixes": ["--log-file="],
+          "shortFlags": ["o", "O"]
+        }
+      ],
+      "tree": [
+        {
+          "policy": "ask",
+          "reason": "tree can write output or follow symbolic links",
+          "arguments": ["--output"],
+          "argumentPrefixes": ["--output="],
+          "shortFlags": ["o", "l"]
+        }
+      ],
+      "git": [
+        {
+          "policy": "ask",
+          "reason": "git diff, log, and show can write output or invoke external diff helpers",
+          "subcommands": ["diff", "log", "show"],
+          "arguments": ["--output", "--ext-diff", "--textconv"],
+          "argumentPrefixes": ["--output="]
+        },
+        {
+          "policy": "ask",
+          "reason": "git branch options can mutate branch refs or tracking configuration",
+          "subcommands": ["branch"],
+          "arguments": [
+            "--delete",
+            "--move",
+            "--copy",
+            "--force",
+            "--track",
+            "--no-track",
+            "--set-upstream-to",
+            "--unset-upstream",
+            "--edit-description",
+            "--create-reflog"
+          ],
+          "argumentPrefixes": ["--set-upstream-to="],
+          "shortFlags": ["d", "D", "m", "M", "c", "C", "f", "t", "u"]
+        },
+        {
+          "policy": "ask",
+          "reason": "git tag options can create, replace, sign, or delete tags",
+          "subcommands": ["tag"],
+          "arguments": [
+            "--delete",
+            "--force",
+            "--annotate",
+            "--sign",
+            "--local-user",
+            "--message",
+            "--file",
+            "--edit",
+            "--create-reflog",
+            "--cleanup"
+          ],
+          "argumentPrefixes": ["--local-user=", "--message=", "--file=", "--cleanup="],
+          "shortFlags": ["d", "f", "a", "s", "u", "m", "F", "e"]
+        }
+      ],
+      "curl": [
+        {
+          "policy": "ask",
+          "reason": "curl can write files, upload data, change the request, load configuration, or read credentials",
+          "arguments": [
+            "--output",
+            "--remote-name",
+            "--remote-name-all",
+            "--output-dir",
+            "--dump-header",
+            "--cookie-jar",
+            "--etag-save",
+            "--trace",
+            "--trace-ascii",
+            "--trace-config",
+            "--stderr",
+            "--libcurl",
+            "--upload-file",
+            "--request",
+            "--data",
+            "--data-ascii",
+            "--data-binary",
+            "--data-raw",
+            "--data-urlencode",
+            "--form",
+            "--form-string",
+            "--json",
+            "--config",
+            "--next",
+            "--no-head",
+            "--get",
+            "--continue-at",
+            "--remote-time",
+            "--remote-header-name",
+            "--cookie",
+            "--header",
+            "--user",
+            "--netrc",
+            "--netrc-file",
+            "--netrc-optional",
+            "--key",
+            "--cert",
+            "--proxy-key",
+            "--proxy-cert",
+            "--write-out"
+          ],
+          "argumentPrefixes": [
+            "--output=",
+            "--remote-name=",
+            "--remote-name-all=",
+            "--output-dir=",
+            "--dump-header=",
+            "--cookie-jar=",
+            "--etag-save=",
+            "--trace=",
+            "--trace-ascii=",
+            "--trace-config=",
+            "--stderr=",
+            "--libcurl=",
+            "--upload-file=",
+            "--request=",
+            "--data=",
+            "--data-ascii=",
+            "--data-binary=",
+            "--data-raw=",
+            "--data-urlencode=",
+            "--form=",
+            "--form-string=",
+            "--json=",
+            "--config=",
+            "--continue-at=",
+            "--cookie=",
+            "--header=",
+            "--user=",
+            "--netrc-file=",
+            "--key=",
+            "--cert=",
+            "--proxy-key=",
+            "--proxy-cert=",
+            "--write-out="
+          ],
+          "shortFlags": ["o", "O", "D", "c", "T", "d", "F", "X", "G", "K", "C", "R", "J", "b", "H", "u", "E", "w"]
+        }
+      ],
+      "go": [
+        {
+          "policy": "ask",
+          "reason": "go list can invoke tools, alter module resolution, use overlays, or export build artifacts",
+          "subcommands": ["list"],
+          "arguments": ["-exec", "-toolexec", "-mod", "-modfile", "-overlay", "-export"],
+          "argumentPrefixes": ["-exec=", "-toolexec=", "-mod=", "-modfile=", "-overlay="]
+        }
+      ],
+      "cargo": [
+        {
+          "policy": "ask",
+          "reason": "cargo tree can resolve or update dependency state unless the lockfile is enforced",
+          "subcommands": ["tree"],
+          "always": true,
+          "unlessArguments": ["--locked", "--frozen"]
+        }
+      ]
+    }
+  },
+  "permission": {
+    "*": "allow",
+    "bash": {
+      "*": "ask",
+      "ls": "allow",
+      "ls *": "allow",
+      "cat": "allow",
+      "cat *": "allow",
+      "head": "allow",
+      "head *": "allow",
+      "tail": "allow",
+      "tail *": "allow",
+      "less": "allow",
+      "less *": "allow",
+      "file": "allow",
+      "file *": "allow",
+      "stat": "allow",
+      "stat *": "allow",
+      "wc": "allow",
+      "wc *": "allow",
+      "tree": "allow",
+      "tree *": "allow",
+      "pwd": "allow",
+      "which": "allow",
+      "which *": "allow",
+      "whereis": "allow",
+      "whereis *": "allow",
+      "type": "allow",
+      "type *": "allow",
+      "rg": "allow",
+      "rg *": "allow",
+      "grep": "allow",
+      "grep *": "allow",
+      "find": "allow",
+      "find *": "allow",
+      "fd": "allow",
+      "fd *": "allow",
+      "ag": "allow",
+      "ag *": "allow",
+      "ack": "allow",
+      "ack *": "allow",
+      "locate": "allow",
+      "locate *": "allow",
+      "git status": "allow",
+      "git status *": "allow",
+      "git diff": "allow",
+      "git diff *": "allow",
+      "git log": "allow",
+      "git log *": "allow",
+      "git show": "allow",
+      "git show *": "allow",
+      "git blame": "allow",
+      "git blame *": "allow",
+      "git rev-parse": "allow",
+      "git rev-parse *": "allow",
+      "git ls-files": "allow",
+      "git ls-files *": "allow",
+      "git ls-tree": "allow",
+      "git ls-tree *": "allow",
+      "git branch": "allow",
+      "git branch -a": "allow",
+      "git branch -v*": "allow",
+      "git remote -v": "allow",
+      "git tag": "allow",
+      "git tag -l*": "allow",
+      "git tag --list*": "allow",
+      "git tag --contains*": "allow",
+      "git tag --no-contains*": "allow",
+      "git tag --points-at*": "allow",
+      "git tag --merged*": "allow",
+      "git tag --no-merged*": "allow",
+      "git tag --sort*": "allow",
+      "git tag --format*": "allow",
+      "git tag -n*": "allow",
+      "env": "allow",
+      "printenv": "allow",
+      "printenv *": "allow",
+      "ps": "allow",
+      "ps *": "allow",
+      "pgrep": "allow",
+      "pgrep *": "allow",
+      "echo $*": "allow",
+      "top -b -n 1*": "allow",
+      "curl -I*": "allow",
+      "curl --head*": "allow",
+      "ping -c*": "allow",
+      "host": "allow",
+      "host *": "allow",
+      "dig": "allow",
+      "dig *": "allow",
+      "nslookup": "allow",
+      "nslookup *": "allow",
+      "npm list": "allow",
+      "npm list *": "allow",
+      "npm ls": "allow",
+      "npm ls *": "allow",
+      "npm view": "allow",
+      "npm view *": "allow",
+      "npm info": "allow",
+      "npm info *": "allow",
+      "npm outdated": "allow",
+      "npm outdated *": "allow",
+      "yarn list": "allow",
+      "yarn list *": "allow",
+      "yarn info": "allow",
+      "yarn info *": "allow",
+      "pip list": "allow",
+      "pip list *": "allow",
+      "pip show": "allow",
+      "pip show *": "allow",
+      "pip freeze": "allow",
+      "pip freeze *": "allow",
+      "cargo tree": "allow",
+      "cargo tree *": "allow",
+      "go list": "allow",
+      "go list *": "allow"
+    },
+    "path": {
+      "*": "allow",
+      "**/.env": { "deny": "Sensitive environment file" },
+      "**/.env.*": { "deny": "Sensitive environment file" },
+      "**/.env.example": "allow",
+      "**/.env.sample": "allow",
+      "**/.ssh/**": { "deny": "SSH secrets are protected" },
+      "**/.gnupg/**": { "deny": "GPG secrets are protected" },
+      "**/.aws/credentials": { "deny": "Cloud credentials are protected" },
+      "**/.config/*token*": { "deny": "Token-bearing config is protected" },
+      "**/.config/**/*token*": { "deny": "Token-bearing config is protected" },
+      "**/.netrc": { "deny": "Network credentials are protected" },
+      "**/.npmrc": { "deny": "Registry credentials are protected" },
+      "**/.pypirc": { "deny": "Registry credentials are protected" }
+    },
+    "external_directory": "ask"
+  },
+  "agents": {
+    "main": {},
+    "subagent": {},
+    "scout": {},
+    "reviewer": {},
+    "designer": {},
+    "task": {}
+  }
+}

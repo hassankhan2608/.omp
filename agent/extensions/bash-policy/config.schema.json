@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/omp-bash-policy/config.schema.json",
+  "title": "OMP Bash policy configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "hideDeniedTools": { "type": "boolean", "default": true },
+    "bashSafety": { "$ref": "#/$defs/bashSafety" },
+    "permission": { "$ref": "#/$defs/permission" },
+    "agents": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/agent" }
+    }
+  },
+  "$defs": {
+    "state": { "enum": ["allow", "ask", "deny"] },
+    "denyReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deny"],
+      "properties": { "deny": { "type": "string", "minLength": 1 } }
+    },
+    "decision": { "oneOf": [{ "$ref": "#/$defs/state" }, { "$ref": "#/$defs/denyReason" }] },
+    "rules": {
+      "type": "object",
+      "propertyNames": { "minLength": 1 },
+      "additionalProperties": { "$ref": "#/$defs/decision" }
+    },
+    "permission": {
+      "type": "object",
+      "propertyNames": { "minLength": 1 },
+      "additionalProperties": {
+        "anyOf": [{ "$ref": "#/$defs/decision" }, { "$ref": "#/$defs/rules" }]
+      }
+    },
+    "matcherArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "shortFlagArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1 }
+    },
+    "commandSafetyRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "reason"],
+      "properties": {
+        "policy": { "enum": ["ask", "deny"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "subcommands": { "$ref": "#/$defs/matcherArray" },
+        "arguments": { "$ref": "#/$defs/matcherArray" },
+        "argumentPrefixes": { "$ref": "#/$defs/matcherArray" },
+        "shortFlags": { "$ref": "#/$defs/shortFlagArray" },
+        "always": { "const": true },
+        "unlessArguments": { "$ref": "#/$defs/matcherArray" }
+      },
+      "anyOf": [
+        { "required": ["subcommands"] },
+        { "required": ["arguments"] },
+        { "required": ["argumentPrefixes"] },
+        { "required": ["shortFlags"] },
+        { "required": ["always"] }
+      ]
+    },
+    "bashSafety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "customEnvironment": { "$ref": "#/$defs/state", "default": "ask" },
+        "pty": { "$ref": "#/$defs/state", "default": "ask" },
+        "commands": {
+          "type": "object",
+          "default": {},
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/commandSafetyRule" }
+          }
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "permission": { "$ref": "#/$defs/permission" } }
+    }
+  }
+}

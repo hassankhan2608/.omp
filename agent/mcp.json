@@ -1,6 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
   "mcpServers": {
+    // ── grep.app — search public GitHub repos ──
+    "grep-app": {
+      "type": "http",
+      "url": "https://mcp.grep.app",
+      "enabled": true
+    },
+    // ── Enabled (mirrored from opencode) ──
     "context7": {
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp"],
@@ -11,10 +18,70 @@
       "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
       "enabled": true
     },
+    "firecrawl-mcp": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": {
+        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"
+      },
+      "enabled": true
+    },
+    "knowledge-graph-memory": {
+      "command": "npx",
+      "args": ["-y", "mcp-knowledge-graph", "--memory-path", "/home/laughingman/.aim"],
+      "enabled": true
+    },
+    "axiom": {
+      "type": "http",
+      "url": "https://mcp.axiom.co/mcp",
+      "enabled": true
+    },
     // ── Disabled (available but off) ──
     "playwright": {
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"],
+      "enabled": false
+    },
+    "mongodb-flobridge": {
+      "command": "npx",
+      "args": ["-y", "mongodb-mcp-server@0.3.0", "--readOnly"],
+      "env": {
+        "MDB_MCP_CONNECTION_STRING": "${MONGODB_URI}"
+      },
+      "enabled": false
+    },
+    "clickhouse-flobridge": {
+      "command": "/usr/bin/uv",
+      "args": ["run", "--with", "mcp-clickhouse", "--python", "3.10", "mcp-clickhouse"],
+      "env": {
+        "CLICKHOUSE_HOST": "${CLICKHOUSE_HOST}",
+        "CLICKHOUSE_PORT": "${CLICKHOUSE_PORT}",
+        "CLICKHOUSE_DATABASE": "${CLICKHOUSE_DATABASE}",
+        "CLICKHOUSE_USER": "${CLICKHOUSE_USER}",
+        "CLICKHOUSE_PASSWORD": "${CLICKHOUSE_PASSWORD}",
+        "CLICKHOUSE_SECURE": "${CLICKHOUSE_SECURE}",
+        "CLICKHOUSE_VERIFY": "${CLICKHOUSE_VERIFY}"
+      },
+      "enabled": false
+    },
+    "StitchMCP": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://stitch.googleapis.com/mcp", "--oauth-scopes", "https://www.googleapis.com/auth/cloud-platform"],
+      "enabled": false
+    },
+    "colab": {
+      "command": "uvx",
+      "args": ["git+https://github.com/googlecolab/colab-mcp"],
+      "timeout": 30000,
+      "enabled": false
+    },
+    "discord": {
+      "command": "node",
+      "args": ["/home/laughingman/.config/opencode/mcp/discord-user-mcp/dist/index.js"],
+      "env": {
+        "DISCORD_TOKEN": "${DISCORD_TOKEN}",
+        "DISCORD_DEFAULT_GUILD": "${DISCORD_DEFAULT_GUILD}"
+      },
       "enabled": false
     }
   }

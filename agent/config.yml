@@ -10,3 +10,6 @@ lsp:
   formatOnWrite: true
 defaultThinkingLevel: auto
 hideThinkingBlock: false
+extensions:
+  - ~/.omp/agent/extensions/bash-policy/src/index.ts
+  - ~/.omp/agent/extensions/terminal-bell/src/index.ts

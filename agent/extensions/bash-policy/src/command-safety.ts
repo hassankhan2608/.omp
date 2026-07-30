@@ -17,7 +17,8 @@ function ruleMatches(rule: CommandSafetyRule, command: BashCommandUnit): boolean
   if (rule.unlessArguments?.some((argument) => hasArgument(command.arguments, argument))) return false;
 
   const matches: boolean[] = [];
-  if (rule.subcommands) matches.push(true);
+  const hasArgMatchers = rule.arguments !== undefined || rule.argumentPrefixes !== undefined || rule.shortFlags !== undefined;
+  if (rule.subcommands && !hasArgMatchers) matches.push(true);
   if (rule.always) matches.push(true);
   if (rule.arguments) {
     matches.push(rule.arguments.some((argument) => hasArgument(command.arguments, argument)));

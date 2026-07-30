@@ -6,10 +6,40 @@ modelRoles:
   vision: google-antigravity/gemini-3.1-flash-lite
   smol: opencode-zen/mimo-v2.5-free:medium
   default: opencode-zen/deepseek-v4-flash-free
+  commit: opencode-zen/deepseek-v4-flash-free
+  advisor: google-antigravity/gemini-3.6-flash
 lsp: 
   formatOnWrite: true
 defaultThinkingLevel: auto
 hideThinkingBlock: false
-extensions:
+extensions: 
   - ~/.omp/agent/extensions/bash-policy/src/index.ts
   - ~/.omp/agent/extensions/terminal-bell/src/index.ts
+github: 
+  enabled: true
+browser: 
+  headless: false
+dev: 
+  autoqaConsent: granted
+tui: 
+  textSizing: false
+display: 
+  showTokenUsage: true
+providers: 
+  tts: auto
+  imageOrder: 
+    - openai-codex
+    - antigravity
+  webSearchGeminiModel: gemini-3.6-flash
+  webSearchOrder: 
+    - gemini
+    - firecrawl
+    - duckduckgo
+    - startpage
+    - ecosia
+speech: 
+  voice: af_heart
+generate_image: 
+  enabled: true
+statusLine: 
+  compactThinkingLevel: true

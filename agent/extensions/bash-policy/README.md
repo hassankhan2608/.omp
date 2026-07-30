@@ -29,7 +29,8 @@ This directory is self-contained. `@gotgenes/pi-permission-system` was used as a
 │   ├── command-safety.ts   # structured Bash argument safety rules
 │   ├── bash.ts             # tree-sitter Bash analysis and hard safety rules
 │   ├── paths.ts            # path extraction and canonicalization
-│   ├── approvals.ts        # session grants and parent approval forwarding
+│   ├── approvals.ts        # session rules, two-stage dialog, parent forwarding
+│   ├── patterns.ts         # command-arity and external-directory pattern derivation
 │   └── principal.ts        # main/subagent/named-agent detection
 ├── tests/
 │   └── policy.test.ts      # behavior and integration tests
@@ -50,25 +51,34 @@ Model requests a tool
 Load global + project + agent policy
         |
         v
+Apply active autonomy profile (low / medium / high)
+        |
+        v
 Resolve tool rule -------------------------> deny -> block
         |
         +-- Bash: parse every executable command
-        |      +-- catastrophic operation -> deny
-        |      +-- opaque wrapper/indirection -> at least ask
+        |      +-- catastrophic operation -> deny (absolute)
+        |      +-- safety floor: command rule / wrapper / redirect -> at least ask
+        |      +-- no floor and a session rule covers it -> allow
+        |      +-- otherwise -> permission rule
         |
         +-- Extract filesystem paths
                +-- sensitive path rule -> allow/ask/deny
                +-- canonical path outside project -> external_directory rule
+               +-- session rule already covers the directory -> allow
         |
         v
 Most restrictive result wins
         |
         +-- allow -> execute
-        +-- ask  -> approve once / allow exact for session / deny
+        +-- ask  -> stage 1: once / session / deny
+        |             stage 2: pick which patterns to grant
         +-- deny -> block
 ```
 
 `deny` outranks `ask`; `ask` outranks `allow`. A safe-looking command cannot hide a denied or approval-requiring command later in a pipeline, list, substitution, redirect, or wrapper.
+
+Safety floors are computed **before** session grants are consulted, and a configured `deny` still outranks an `ask` floor. A `git diff *` grant therefore allows `git diff --stat` while `git diff --output=…`, `git diff --ext-diff`, and `git diff > file` keep asking; a `git push *` deny still blocks `git push origin main > log` without prompting.
 
 ## Fresh-machine installation
 
@@ -200,9 +210,24 @@ A complete configuration has this shape:
         }
       }
     }
+  },
+  "defaultProfile": "medium",
+  "profiles": {
+    "low": {
+      "description": "Most prompts. Reads stay automatic; every mutation asks.",
+      "permission": { "write": "ask", "edit": "ask" },
+      "bashSafety": { "customEnvironment": "deny" }
+    },
+    "medium": { "description": "Balanced." },
+    "high": {
+      "description": "Fewest prompts. Adds routine build and test commands.",
+      "permission": { "bash": { "npm test *": "allow", "make *": "allow" } }
+    }
   }
 }
 ```
+
+`profiles` accepts only the keys `low`, `medium`, and `high`. Each may set `description`, a `permission` overlay, and `customEnvironment`/`pty` safety floors. A profile's `commands` safety rules are not overridable — command floors live in the top-level `bashSafety`.
 
 ### Decisions
 
@@ -285,6 +310,37 @@ Read-only prefixes are hardened against mutating or executing options. Examples 
 - output-writing options for `tree` and `less`;
 - execution or overlay options for `go list`.
 
+## Autonomy profiles
+
+Three switchable profiles set how often the policy prompts. The level describes **autonomy, not restriction**: `low` prompts most, `high` prompts least.
+
+| Profile | Prompting | Effect |
+| --- | --- | --- |
+| `low` | most | Reads stay automatic. `edit`, `write`, and `task` ask. Environment and process reads ask. Custom `env` is denied outright. |
+| `medium` | balanced | The shipped allow-list above. Reads automatic; writes and exec ask. |
+| `high` | fewest | Adds routine build, test, format, and staging commands: `npm test`, `npm run *`, `bun test`, `cargo test`, `go test`, `make`, `pytest`, `tsc`, `prettier`, `eslint`, `git add`, `git commit`, `git pull`, `mkdir`, `touch`, `cp`, `mv`. |
+
+`defaultProfile` in `config.json` picks the starting profile (`medium` when unset). A project file may override both the default and any profile's rules.
+
+### Switching mid-session
+
+- `/permissions` — pick a profile from a list showing the active one.
+- **Shift+Tab** — cycle `low → medium → high → low`.
+
+The active profile shows in the footer as `perm:<name>`. Switching profiles **keeps existing session grants**: patterns you explicitly approved stay approved.
+
+### What profiles cannot do
+
+No profile relaxes a safety floor. At every level, including `high`:
+
+- catastrophic denies stay denied (`rm -rf /`, fork bombs, `curl | sh`);
+- sensitive-path denies stay denied (`.ssh`, `.env`, credential files);
+- explicit `{"deny": "reason"}` rules stay denied;
+- `bashSafety` command floors still apply — `git diff --output=/tmp/patch` asks at `high`;
+- destructive commands stay asking — `git push`, `git push --force`, and `rm` are absent from the `high` allow-list by design.
+
+`high` is deliberately not a yolo mode. Profile overlays merge with last-match-wins precedence and `bashSafety` policies merge to the **most restrictive** of base and overlay, so an overlay can only tighten those floors.
+
 ## Tree-sitter Bash parsing
 
 Every Bash call is parsed with `tree-sitter-bash`. The policy evaluates each executable command unit rather than matching only the beginning of the raw string.
@@ -329,13 +385,50 @@ These checks run before interactive approval. There is no approval button for a 
 
 ## Session approvals
 
-For an `ask` decision, the dialog offers:
+An `ask` decision opens a two-stage flow modeled on OpenCode's permission engine.
+
+**Stage one** offers:
 
 1. **Approve once** — allow this call only;
-2. **Allow this exact request for this session** — remember the exact tool input under the current session ID;
+2. **Allow for this session** — open stage two;
 3. **Deny** — block it.
 
-A session grant is exact. Approving `git commit -m "one"` does not approve a different commit command. Filesystem grants are also bound to the current working directory and canonical targets, so retargeting a symlink asks again. Grants are removed on session shutdown and are not written to disk.
+**Stage two** lists every unit the call needs, so a compound command is approved piece by piece instead of as one opaque string:
+
+```text
+△ Allow for this session
+  git pull && git commit -m x && git push
+  ────────────────────────────────────────
+  ● git diff --stat a.js          already allowed
+  ☐ git commit -m x               git commit *
+  ☐ git push                      git push *
+  ────────────────────────────────────────
+  › Allow All
+    Allow Exact
+    Apply Selected
+    Back
+    Deny
+  ↑/↓ move  Space/Enter toggle or select  Esc back
+```
+
+- `●` rows are already permitted and are not selectable.
+- `☐` rows are selectable with **Space** or **Enter**; the trailing text is the pattern that would be stored.
+- **Allow All** stores every offered pattern. **Apply Selected** stores only the checked ones.
+- **Allow Exact** stores just this exact tool input, granting no pattern.
+- **Back** and **Esc** return to stage one; **Deny** blocks the call.
+
+Stored patterns are derived from a command-arity table, so the grant matches the command a human would recognize rather than the literal string:
+
+| Command | Stored pattern |
+| --- | --- |
+| `git push origin main` | `git push *` |
+| `git diff --stat file.ts` | `git diff *` |
+| `npm run build --silent` | `npm run build *` |
+| `echo hello world` | `echo *` |
+
+External paths are scoped to their containing directory, matching OpenCode: approving `/srv/shared/app/config.json` stores `/srv/shared/app/*`.
+
+A session grant may lift a permission `ask` to `allow`. It can never lift a `deny`, bypass a catastrophic deny, or silence a `bashSafety` floor — floors are evaluated before grants are consulted, so a granted `git diff *` still asks for `git diff --output=…`. Filesystem grants resolve through canonical targets, so retargeting a symlink asks again. **Allow Exact** grants remain bound to the exact tool input and working directory. Grants are removed on session shutdown and are never written to disk.
 
 ## Sensitive paths
 
@@ -514,7 +607,13 @@ The tests cover:
 - path extraction across tools;
 - real extension registration, safe allow, session approval, and denial;
 - denied-tool hiding;
-- parent forwarding and session grants.
+- parent forwarding and session rule matching;
+- command-arity pattern derivation and external-directory scoping;
+- profile overlays, including that no profile relaxes a deny or safety floor;
+- mid-session profile cycling with session grants preserved;
+- the stage-two picker's real render and key handling (toggle, Allow All, Apply Selected, Escape);
+- grant reuse across later commands and sibling files inside a granted directory;
+- that a session grant cannot silence a `bashSafety` floor, and a configured `deny` outranks an `ask` floor.
 
 Manual smoke checks after restarting OMP:
 
@@ -522,12 +621,15 @@ Manual smoke checks after restarting OMP:
 |---|---|
 | `ls -la` | Runs without this extension prompting. |
 | `git status` | Runs without this extension prompting. |
+| `git diff --stat file; echo "---"; git diff other` | Runs without prompting at every profile. |
 | `git commit --allow-empty -m "permission test"` | Asks. |
-| Repeat after choosing session approval | Runs without a second prompt. |
-| `cat ~/.ssh/id_rsa` | Denied. |
+| Choose session approval, then **Apply Selected** on `git commit *` | Repeat commits run without a second prompt. |
+| `cat ~/.ssh/id_rsa` | Denied at every profile. |
 | `find . -delete` | Asks. |
 | `sudo rm -rf /` | Denied with no approval option. |
-| `ls; git commit -m "test"` | Asks for the whole Bash call. |
+| `ls; git commit -m "test"` | Asks; stage two lists both units, with `ls` already allowed. |
+| Shift+Tab to `high`, then `npm test` | Runs without prompting. |
+| Shift+Tab to `high`, then `git push` | Still asks. |
 
 Use a disposable Git repository for commit tests.
 

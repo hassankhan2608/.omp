@@ -12,6 +12,16 @@
     "agents": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/agent" }
+    },
+    "defaultProfile": { "$ref": "#/$defs/profileName", "default": "medium" },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "low": { "$ref": "#/$defs/profile" },
+        "medium": { "$ref": "#/$defs/profile" },
+        "high": { "$ref": "#/$defs/profile" }
+      }
     }
   },
   "$defs": {
@@ -88,6 +98,23 @@
       "type": "object",
       "additionalProperties": false,
       "properties": { "permission": { "$ref": "#/$defs/permission" } }
+    },
+    "profileName": { "enum": ["low", "medium", "high"] },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string", "minLength": 1 },
+        "permission": { "$ref": "#/$defs/permission" },
+        "bashSafety": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "customEnvironment": { "$ref": "#/$defs/state" },
+            "pty": { "$ref": "#/$defs/state" }
+          }
+        }
+      }
     }
   }
 }

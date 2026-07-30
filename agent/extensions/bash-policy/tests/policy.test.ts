@@ -2,19 +2,23 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionUIDialogOptions } from "@oh-my-pi/pi-coding-agent";
 import extension from "../src/index";
 import { analyzeBash } from "../src/bash";
-import { applyAgentPolicy, loadPolicyConfig, type PermissionConfig } from "../src/config";
+import { applyAgentPolicy, applyProfile, loadPolicyConfig, type PermissionConfig } from "../src/config";
+import { bashAlwaysPattern, externalAlwaysPattern } from "../src/patterns";
 import { resolveBashToolSafety, resolveCommandSafety } from "../src/command-safety";
 import { assessPath, extractToolPaths } from "../src/paths";
 import { globMatches, resolvePolicy } from "../src/policy";
 import { detectPrincipal } from "../src/principal";
 import {
-  hasSessionGrant,
+  addSessionRules,
+  hasExactGrant,
   registerInteractiveSession,
   requestApproval,
+  sessionAllows,
   unregisterSession,
+  type ApprovalItem,
 } from "../src/approvals";
 
 const temporaryDirectories: string[] = [];
@@ -29,7 +33,9 @@ async function temporaryDirectory(): Promise<string> {
   return directory;
 }
 
-function context(id: string, cwd: string, hasUI: boolean, select?: (prompt: string) => Promise<string | undefined>): ExtensionContext {
+type SelectMock = (prompt: string, options: string[]) => Promise<string | undefined>;
+
+function context(id: string, cwd: string, hasUI: boolean, select?: SelectMock): ExtensionContext {
   return {
     cwd,
     hasUI,
@@ -37,15 +43,44 @@ function context(id: string, cwd: string, hasUI: boolean, select?: (prompt: stri
     sessionManager: { getSessionId: () => id },
     ui: {
       notify: () => undefined,
-      select: select ?? (async () => undefined),
+      setStatus: () => undefined,
+      select: select
+        ? async (prompt: string, options: unknown[]) =>
+            select(
+              prompt,
+              options.map((option) =>
+                typeof option === "string"
+                  ? option
+                  : option && typeof option === "object" && "label" in option
+                    ? String(option.label)
+                    : "",
+              ),
+            )
+        : async () => undefined,
     },
   } as unknown as ExtensionContext;
 }
 
-type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
+/** Answers stage one with `Allow for this session`, then approves every pattern stage two
+ *  offers. `prompts()` counts stage-one dialogs, i.e. how often the user was interrupted. */
+function sessionApprover(id: string, cwd: string): { ctx: ExtensionContext; prompts: () => number } {
+  let prompts = 0;
+  const ctx = context(id, cwd, true, async (_prompt, options) => {
+    if (options.includes("Approve once")) {
+      prompts++;
+      return "Allow for this session";
+    }
+    // Stage two: take every offered pattern, else settle for an exact grant.
+    return options.includes("Allow all patterns") ? "Allow all patterns" : "Allow only this exact request";
+  });
+  return { ctx, prompts: () => prompts };
+}
 
+type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
 interface FakeExtension {
   handlers: Map<string, ExtensionHandler>;
+  commands: Map<string, { handler: (ctx: ExtensionContext) => Promise<void> }>;
+  shortcuts: Map<string, { handler: (ctx: ExtensionContext) => Promise<void> }>;
   activeTools: string[];
   api: ExtensionAPI;
 }
@@ -54,6 +89,8 @@ function fakeExtension(): FakeExtension {
   const handlers = new Map<string, ExtensionHandler>();
   const state: FakeExtension = {
     handlers,
+    commands: new Map(),
+    shortcuts: new Map(),
     activeTools: ["read", "write", "bash", "task"],
     api: undefined as unknown as ExtensionAPI,
   };
@@ -64,6 +101,12 @@ function fakeExtension(): FakeExtension {
     },
     setLabel: () => undefined,
     on: (event: string, handler: ExtensionHandler) => handlers.set(event, handler),
+    registerCommand: (name: string, options: { handler: (ctx: ExtensionContext) => Promise<void> }) => {
+      state.commands.set(name, options);
+    },
+    registerShortcut: (key: string, options: { handler: (ctx: ExtensionContext) => Promise<void> }) => {
+      state.shortcuts.set(key, options);
+    },
     getActiveTools: () => [...state.activeTools],
     setActiveTools: async (tools: string[]) => {
       state.activeTools = tools;
@@ -289,31 +332,38 @@ describe("path security", () => {
 });
 
 describe("runtime integration", () => {
-  test("allows safe Bash, remembers session approval, and denies sensitive reads", async () => {
+  test("allows safe Bash, reuses session grants, and denies sensitive reads", async () => {
     const cwd = await temporaryDirectory();
-    let prompts = 0;
-    const ctx = context("main-runtime", cwd, true, async () => {
-      prompts++;
-      return "Allow this exact request for this session";
-    });
+    await mkdir(join(cwd, ".omp"));
+    await writeFile(join(cwd, ".omp", "bash-policy.json"), JSON.stringify({ defaultProfile: "medium" }));
+    const { ctx, prompts } = sessionApprover("main-runtime", cwd);
     const fake = fakeExtension();
     await start(fake, ctx);
     const toolCall = fake.handlers.get("tool_call")!;
 
+    // Reads never prompt.
     expect(await toolCall({ toolName: "bash", input: { command: "ls -la" } }, ctx)).toBeUndefined();
-    expect(prompts).toBe(0);
-    expect(await toolCall({ toolName: "bash", input: { command: "git commit -m x" } }, ctx)).toBeUndefined();
-    expect(await toolCall({ toolName: "bash", input: { command: "git commit -m x" } }, ctx)).toBeUndefined();
-    expect(prompts).toBe(1);
+    expect(await toolCall({ toolName: "bash", input: { command: "find . -name '*.ts'" } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(0);
 
-    await toolCall({ toolName: "bash", input: { command: "find . -name '*.ts'" } }, ctx);
-    expect(prompts).toBe(1);
+    // `medium` allows local git and package work outright.
+    expect(await toolCall({ toolName: "bash", input: { command: "git commit -m x" } }, ctx)).toBeUndefined();
+    expect(await toolCall({ toolName: "bash", input: { command: "npm test" } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(0);
+
+    // `git push` is held back at `medium`; approving it once covers later pushes.
+    expect(await toolCall({ toolName: "bash", input: { command: "git push origin main" } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(1);
+    expect(await toolCall({ toolName: "bash", input: { command: "git push --tags" } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(1);
+
+    // Safety floors keep prompting regardless of grants.
     await toolCall({ toolName: "bash", input: { command: "find . -fprint report.txt" } }, ctx);
-    expect(prompts).toBe(2);
+    expect(prompts()).toBe(2);
     await toolCall({ toolName: "bash", input: { command: "ls", env: { LESSOPEN: "|sh helper" } } }, ctx);
-    expect(prompts).toBe(3);
+    expect(prompts()).toBe(3);
     await toolCall({ toolName: "bash", input: { command: "ls", pty: true } }, ctx);
-    expect(prompts).toBe(4);
+    expect(prompts()).toBe(4);
 
     const denied = await toolCall(
       { toolName: "read", input: { path: join(cwd, ".ssh", "id_rsa") } },
@@ -321,6 +371,7 @@ describe("runtime integration", () => {
     ) as { block: boolean; reason: string };
     expect(denied.block).toBe(true);
     expect(denied.reason).toContain("SSH secrets are protected");
+    expect(prompts()).toBe(4);
     await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
   });
 
@@ -333,14 +384,23 @@ describe("runtime integration", () => {
     const link = join(project, "link");
     await symlink(outsideOne, link);
     let prompts = 0;
-    const ctx = context("main-retarget", project, true, async () => {
-      prompts++;
-      return "Allow this exact request for this session";
+    const ctx = context("main-retarget", project, true, async (_prompt, options) => {
+      if (options.includes("Approve once")) {
+        prompts++;
+        return "Allow for this session";
+      }
+      // Bind the grant to this exact request so retargeting must ask again.
+      return "Allow only this exact request";
     });
     const fake = fakeExtension();
     await start(fake, ctx);
     const toolCall = fake.handlers.get("tool_call")!;
     await toolCall({ toolName: "read", input: { path: "link" } }, ctx);
+    expect(prompts).toBe(1);
+    // Same spelling, same grant: no second prompt.
+    await toolCall({ toolName: "read", input: { path: "link" } }, ctx);
+    expect(prompts).toBe(1);
+    // Retargeting the symlink changes the canonical path, so the grant no longer matches.
     await rm(link);
     await symlink(outsideTwo, link);
     await toolCall({ toolName: "read", input: { path: "link" } }, ctx);
@@ -387,20 +447,398 @@ describe("runtime integration", () => {
       title: "Allow bash?",
       description: "git commit -m x",
       principal: "scout",
+      items: [{ label: "git commit -m x", allowed: false, rule: { surface: "bash", pattern: "git commit *" } }],
     });
-    expect(result).toBe("once");
+    expect(result).toEqual({ kind: "once" });
     expect(prompts[0]).toContain("Subagent scout");
 
-    const sessionChoiceParent = context("parent-forward", cwd, true, async () => "Allow this exact request for this session");
+    const sessionChoiceParent = context("parent-forward", cwd, true, async (_prompt, options) =>
+      options.includes("Approve once") ? "Allow for this session" : "Allow all patterns",
+    );
     registerInteractiveSession(sessionChoiceParent);
-    expect(await requestApproval(child, {
+    const sessionResult = await requestApproval(child, {
       key: "repeat",
       title: "Allow bash?",
       description: "git commit -m x",
       principal: "scout",
-    })).toBe("session");
-    expect(hasSessionGrant(child, "repeat")).toBe(true);
+      items: [{ label: "git commit -m x", allowed: false, rule: { surface: "bash", pattern: "git commit *" } }],
+    });
+    expect(sessionResult).toEqual({
+      kind: "rules",
+      rules: [{ surface: "bash", pattern: "git commit *" }],
+      exact: false,
+    });
+    addSessionRules(child, [{ surface: "bash", pattern: "git commit *" }]);
+    expect(sessionAllows(child, "bash", "git commit -m y")).toBe(true);
+    expect(sessionAllows(child, "bash", "git push")).toBe(false);
     unregisterSession(child);
     unregisterSession(sessionChoiceParent);
+  });
+});
+
+describe("autonomy profiles", () => {
+  test("derives session patterns from command arity", async () => {
+    const pattern = async (command: string): Promise<string> => {
+      const analysis = await analyzeBash(command);
+      return bashAlwaysPattern(analysis.commands[0]!);
+    };
+    expect(await pattern("git push origin main")).toBe("git push *");
+    expect(await pattern("git diff --stat file.ts")).toBe("git diff *");
+    expect(await pattern("npm run build --silent")).toBe("npm run build *");
+    expect(await pattern("npm install left-pad")).toBe("npm install *");
+    expect(await pattern("echo hello world")).toBe("echo *");
+    expect(await pattern("rm -rf build")).toBe("rm *");
+    expect(await pattern("./scripts/deploy.sh --prod")).toBe("deploy.sh *");
+  });
+
+  test("scopes external paths to their containing directory", async () => {
+    const root = await temporaryDirectory();
+    const file = join(root, "nested", "config.json");
+    await mkdir(dirname(file));
+    await writeFile(file, "{}");
+    expect(await externalAlwaysPattern(file)).toBe(join(root, "nested", "*"));
+    expect(await externalAlwaysPattern(join(root, "nested"))).toBe(join(root, "nested", "*"));
+    expect(await externalAlwaysPattern(join(root, "missing", "gone.txt"))).toBe(join(root, "missing", "*"));
+  });
+
+  test("each profile widens autonomy without ever relaxing a floor", async () => {
+    const cwd = await temporaryDirectory();
+    const { config } = await loadPolicyConfig(join(homedir(), ".omp", "agent", "extensions", "bash-policy"), cwd);
+    const base = applyAgentPolicy(config, "main");
+    const low = applyProfile(base, "low");
+    const medium = applyProfile(base, "medium");
+    const high = applyProfile(base, "high");
+    const bash = (profile: typeof low, command: string) => resolvePolicy(profile.permission, "bash", command).policy;
+
+    // File edits are automatic at every level — plan mode is the gate, not this policy.
+    for (const profile of [low, medium, high]) {
+      expect(resolvePolicy(profile.permission, "write", "any").policy).toBe("allow");
+      expect(resolvePolicy(profile.permission, "edit", "any").policy).toBe("allow");
+      expect(bash(profile, "git diff --stat")).toBe("allow");
+      expect(bash(profile, "rg pattern src")).toBe("allow");
+    }
+
+    // low: reads only. medium: reversible work. high: everything not carved out.
+    expect([bash(low, "npm test"), bash(medium, "npm test"), bash(high, "npm test")]).toEqual(["ask", "allow", "allow"]);
+    expect([bash(low, "mkdir out"), bash(medium, "mkdir out"), bash(high, "mkdir out")]).toEqual(["ask", "allow", "allow"]);
+    expect([bash(low, "git commit -m x"), bash(medium, "git commit -m x"), bash(high, "git commit -m x")]).toEqual(["ask", "allow", "allow"]);
+    expect([bash(low, "git push"), bash(medium, "git push"), bash(high, "git push")]).toEqual(["ask", "ask", "allow"]);
+    expect([bash(low, "rm file"), bash(medium, "rm file"), bash(high, "rm file")]).toEqual(["ask", "ask", "allow"]);
+
+    // Carve-outs that hold even at `high`.
+    for (const command of ["sudo rm file", "systemctl restart nginx", "aws s3 rm s3://b", "terraform apply", "passwd root"]) {
+      expect(bash(high, command)).toBe("ask");
+    }
+    for (const command of ["dd if=/dev/zero of=/dev/sda", "mkfs.ext4 /dev/sda1", "wipefs /dev/sda"]) {
+      expect(bash(high, command)).toBe("deny");
+    }
+
+    // Sensitive paths are denied regardless of profile.
+    for (const profile of [low, medium, high]) {
+      expect(resolvePolicy(profile.permission, "path", join(cwd, ".ssh", "id_rsa")).policy).toBe("deny");
+    }
+  });
+
+  test("cycles profiles on demand without dropping session grants", async () => {
+    const cwd = await temporaryDirectory();
+    await mkdir(join(cwd, ".omp"));
+    await writeFile(join(cwd, ".omp", "bash-policy.json"), JSON.stringify({ defaultProfile: "medium" }));
+    const ctx = context("profile-cycle", cwd, true);
+    const fake = fakeExtension();
+    await start(fake, ctx);
+
+    const toolCall = fake.handlers.get("tool_call")!;
+    const cycle = fake.shortcuts.get("shift+tab")!;
+    expect(fake.commands.has("permissions")).toBe(true);
+
+    // medium: `git push` needs approval, and this context answers nothing, so it blocks.
+    expect(await toolCall({ toolName: "bash", input: { command: "git push" } }, ctx)).toEqual({
+      block: true,
+      reason: "Denied by user: git push",
+    });
+    addSessionRules(ctx, [{ surface: "bash", pattern: "git commit *" }]);
+
+    // medium -> high: push is now automatic.
+    await cycle.handler(ctx);
+    expect(await toolCall({ toolName: "bash", input: { command: "git push" } }, ctx)).toBeUndefined();
+    expect(sessionAllows(ctx, "bash", "git commit -m x")).toBe(true);
+
+    // high -> low: reversible work needs approval again, and the grant still stands.
+    await cycle.handler(ctx);
+    expect(await toolCall({ toolName: "bash", input: { command: "npm test" } }, ctx)).toEqual({
+      block: true,
+      reason: "Denied by user: npm test",
+    });
+    expect(sessionAllows(ctx, "bash", "git commit -m x")).toBe(true);
+    // Edits stay allowed at every profile.
+    expect(await toolCall({ toolName: "write", input: { path: join(cwd, "out.txt") } }, ctx)).toBeUndefined();
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+  });
+});
+
+describe("session-scope picker", () => {
+  interface Dialog {
+    title: string;
+    options: string[];
+    marker?: "radio" | "checkbox";
+    checked?: readonly number[];
+    markableCount?: number;
+  }
+
+  /** Script both stages and capture every dialog the extension opened. */
+  async function run(items: ApprovalItem[], answers: string[], requiresExact = false) {
+    const dialogs: Dialog[] = [];
+    let turn = 0;
+    const ctx = {
+      cwd: "/tmp",
+      hasUI: true,
+      getSystemPrompt: () => [],
+      sessionManager: { getSessionId: () => `picker-${Math.random()}` },
+      ui: {
+        notify: () => undefined,
+        setStatus: () => undefined,
+        select: async (title: string, options: unknown[], dialogOptions?: ExtensionUIDialogOptions) => {
+          dialogs.push({
+            title,
+            options: options.map((option) =>
+              typeof option === "string" ? option : option && typeof option === "object" && "label" in option ? String(option.label) : "",
+            ),
+            marker: dialogOptions?.selectionMarker,
+            checked: dialogOptions?.checkedIndices,
+            markableCount: dialogOptions?.markableCount,
+          });
+          return answers[turn++];
+        },
+      },
+    } as unknown as ExtensionContext;
+
+    const result = await requestApproval(ctx, {
+      key: "picker",
+      title: "Allow bash?",
+      description: "compound",
+      principal: "main",
+      items,
+      requiresExact,
+    });
+    return { result, dialogs, ctx };
+  }
+
+  const compound = (): ApprovalItem[] => [
+    { label: "git diff --stat a.js", allowed: true },
+    { label: "git commit -m x", allowed: false, rule: { surface: "bash", pattern: "git commit *" } },
+    { label: "git push", allowed: false, rule: { surface: "bash", pattern: "git push *" } },
+  ];
+
+  test("stage two offers patterns with native checkbox markers", async () => {
+    const { dialogs } = await run(compound(), ["Allow for this session", "Deny"]);
+
+    // Stage one uses radio markers.
+    expect(dialogs[0]!.marker).toBe("radio");
+    expect(dialogs[0]!.options).toEqual(["Approve once", "Allow for this session", "Deny"]);
+
+    // Stage two uses checkbox markers, and only pattern rows are markable.
+    const stageTwo = dialogs[1]!;
+    expect(stageTwo.marker).toBe("checkbox");
+    expect(stageTwo.markableCount).toBe(2);
+    expect(stageTwo.checked).toEqual([]);
+    expect(stageTwo.options.slice(0, 2)).toEqual(["git commit *", "git push *"]);
+    // Already-allowed rows are context in the title, never dead rows.
+    expect(stageTwo.title).toContain("already allowed");
+    expect(stageTwo.title).toContain("git diff --stat a.js");
+    // Apply is absent until something is checked.
+    expect(stageTwo.options).not.toContain("Apply selected patterns");
+  });
+
+  test("selecting a pattern toggles it and reopens with it checked", async () => {
+    const { dialogs } = await run(compound(), [
+      "Allow for this session",
+      "git push *", // toggle on
+      "Deny",
+    ]);
+
+    expect(dialogs[1]!.checked).toEqual([]);
+    // Reopened with `git push *` (index 1) checked and Apply now offered.
+    expect(dialogs[2]!.checked).toEqual([1]);
+    expect(dialogs[2]!.options).toContain("Apply selected patterns");
+    expect(dialogs[2]!.title).toContain("(1 selected)");
+  });
+
+  test("Apply grants only the checked patterns", async () => {
+    const { result } = await run(compound(), [
+      "Allow for this session",
+      "git push *",
+      "Apply selected patterns",
+    ]);
+    expect(result).toEqual({
+      kind: "rules",
+      rules: [{ surface: "bash", pattern: "git push *" }],
+      exact: false,
+    });
+  });
+
+  test("Allow all grants every offered pattern", async () => {
+    const { result } = await run(compound(), ["Allow for this session", "Allow all patterns"]);
+    expect(result).toEqual({
+      kind: "rules",
+      rules: [
+        { surface: "bash", pattern: "git commit *" },
+        { surface: "bash", pattern: "git push *" },
+      ],
+      exact: false,
+    });
+  });
+
+  test("Back returns to stage one, where Approve once still wins", async () => {
+    const { result, dialogs } = await run(compound(), [
+      "Allow for this session",
+      "← Back",
+      "Approve once",
+    ]);
+    expect(result).toEqual({ kind: "once" });
+    // Stage one was shown twice: initial, then again after Back.
+    expect(dialogs.filter((d) => d.marker === "radio")).toHaveLength(2);
+  });
+
+  test("Allow only this exact request grants no pattern", async () => {
+    const { result } = await run(compound(), [
+      "Allow for this session",
+      "Allow only this exact request",
+    ]);
+    expect(result).toEqual({ kind: "exact" });
+  });
+
+  test("a request with no grantable pattern offers no checkbox rows", async () => {
+    const { result, dialogs } = await run([{ label: "ls", allowed: false }], [
+      "Allow for this session",
+      "Allow only this exact request",
+    ], true);
+    expect(dialogs[1]!.markableCount).toBe(0);
+    expect(dialogs[1]!.options).not.toContain("Allow all patterns");
+    expect(result).toEqual({ kind: "exact" });
+  });
+
+  test("an unrecognized answer backs out instead of looping", async () => {
+    // A surface that keeps answering the same way must terminate, not hang.
+    const { result } = await run(compound(), ["Allow for this session", "something-else", "Deny"]);
+    expect(result).toEqual({ kind: "deny" });
+  });
+});
+
+describe("end-to-end grant reuse", () => {
+  test("one compound approval covers later commands matching the same patterns", async () => {
+    const cwd = await temporaryDirectory();
+    const { ctx, prompts } = sessionApprover("e2e-compound", cwd);
+    const fake = fakeExtension();
+    await start(fake, ctx);
+    const toolCall = fake.handlers.get("tool_call")!;
+
+    // `git diff` is already allowed and `git push` is not, so only push drives the prompt.
+    expect(await toolCall({ toolName: "bash", input: { command: "git diff; git push origin main" } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(1);
+
+    // Different push arguments match the stored `git push *`, so no second prompt.
+    expect(await toolCall({ toolName: "bash", input: { command: "git push --tags" } }, ctx)).toBeUndefined();
+    expect(await toolCall({ toolName: "bash", input: { command: "git diff; git push -u origin dev" } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(1);
+
+    // A command outside the granted pattern still asks.
+    await toolCall({ toolName: "bash", input: { command: "sudo systemctl restart nginx" } }, ctx);
+    expect(prompts()).toBe(2);
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+  });
+
+  test("an external-directory grant covers siblings but not other directories", async () => {
+    const root = await temporaryDirectory();
+    const project = join(root, "project");
+    const shared = join(root, "shared");
+    const other = join(root, "other");
+    await Promise.all([mkdir(project), mkdir(shared), mkdir(other)]);
+    await Promise.all([
+      writeFile(join(shared, "a.txt"), "a"),
+      writeFile(join(shared, "b.txt"), "b"),
+      writeFile(join(other, "c.txt"), "c"),
+    ]);
+
+    const { ctx, prompts } = sessionApprover("e2e-external", project);
+    const fake = fakeExtension();
+    await start(fake, ctx);
+    const toolCall = fake.handlers.get("tool_call")!;
+
+    expect(await toolCall({ toolName: "read", input: { path: join(shared, "a.txt") } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(1);
+
+    // Sibling inside the granted directory reuses the scope.
+    expect(await toolCall({ toolName: "read", input: { path: join(shared, "b.txt") } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(1);
+
+    // A different external directory is outside the granted scope.
+    await toolCall({ toolName: "read", input: { path: join(other, "c.txt") } }, ctx);
+    expect(prompts()).toBe(2);
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+  });
+
+  test("a session grant never lifts a deny or a safety floor", async () => {
+    const cwd = await temporaryDirectory();
+    const { ctx, prompts } = sessionApprover("e2e-floors", cwd);
+    const fake = fakeExtension();
+    await start(fake, ctx);
+    const toolCall = fake.handlers.get("tool_call")!;
+
+    // Sensitive path stays denied even though this context approves everything offered.
+    const secret = await toolCall({ toolName: "read", input: { path: join(homedir(), ".ssh", "id_rsa") } }, ctx) as { block: boolean; reason: string };
+    expect(secret.block).toBe(true);
+    expect(secret.reason).toContain("SSH secrets are protected");
+
+    // Catastrophic command stays denied with no approval path.
+    const nuke = await toolCall({ toolName: "bash", input: { command: "rm -rf /" } }, ctx) as { block: boolean; reason: string };
+    expect(nuke.block).toBe(true);
+
+    // Neither denial consulted the user, and plain reads need no prompt.
+    expect(prompts()).toBe(0);
+    expect(await toolCall({ toolName: "bash", input: { command: "git diff --stat" } }, ctx)).toBeUndefined();
+    expect(prompts()).toBe(0);
+
+    // Approving `git diff *` cannot silence the bashSafety floor: each dangerous form
+    // asks again rather than riding the earlier grant.
+    await toolCall({ toolName: "bash", input: { command: "git diff --output=/tmp/patch" } }, ctx);
+    expect(prompts()).toBe(1);
+    await toolCall({ toolName: "bash", input: { command: "git diff --ext-diff" } }, ctx);
+    expect(prompts()).toBe(2);
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+  });
+});
+
+describe("floor and deny interaction", () => {
+  test("a configured deny outranks an ask-level safety floor", async () => {
+    const cwd = await temporaryDirectory();
+    await mkdir(join(cwd, ".omp"));
+    await writeFile(
+      join(cwd, ".omp", "bash-policy.json"),
+      JSON.stringify({ permission: { bash: { "git push *": { deny: "Pushing is disabled here" } } } }),
+    );
+
+    let stageOne = 0;
+    const ctx = context(
+      "floor-deny",
+      cwd,
+      true,
+      async () => {
+        stageOne++;
+        return "Approve once";
+      },
+    );
+    const fake = fakeExtension();
+    await start(fake, ctx);
+    const toolCall = fake.handlers.get("tool_call")!;
+
+    // Redirection raises an `ask` floor, but the configured deny must still win.
+    const blocked = await toolCall(
+      { toolName: "bash", input: { command: "git push origin main > /tmp/push.log" } },
+      ctx,
+    ) as { block: boolean; reason: string };
+    expect(blocked.block).toBe(true);
+    expect(blocked.reason).toContain("Pushing is disabled here");
+    expect(stageOne).toBe(0);
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
   });
 });

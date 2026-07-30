@@ -29,12 +29,25 @@ export interface AgentConfig {
   permission?: PermissionConfig;
 }
 
+/** Autonomy level: `low` prompts most, `high` prompts least. Never relaxes denies. */
+export type ProfileName = "low" | "medium" | "high";
+
+export const PROFILE_ORDER: readonly ProfileName[] = ["low", "medium", "high"];
+
+export interface ProfileConfig {
+  description?: string;
+  permission?: PermissionConfig;
+  bashSafety?: Partial<Pick<BashSafetyConfig, "customEnvironment" | "pty">>;
+}
+
 export interface PolicyConfig {
   $schema?: string;
   hideDeniedTools: boolean;
   bashSafety: BashSafetyConfig;
   permission: PermissionConfig;
   agents: Record<string, AgentConfig>;
+  profiles: Record<ProfileName, ProfileConfig>;
+  defaultProfile: ProfileName;
 }
 
 const policySchema = z.enum(["allow", "ask", "deny"]);
@@ -71,12 +84,22 @@ const bashSafetySchema = z.strictObject({
   commands: z.record(z.string().min(1), z.array(commandSafetyRuleSchema)).optional(),
 });
 const agentSchema = z.strictObject({ permission: permissionSchema.optional() });
+const profileSchema = z.strictObject({
+  description: z.string().min(1).optional(),
+  permission: permissionSchema.optional(),
+  bashSafety: z
+    .strictObject({ customEnvironment: policySchema.optional(), pty: policySchema.optional() })
+    .optional(),
+});
+const profileNameSchema = z.enum(["low", "medium", "high"]);
 const configSchema = z.strictObject({
   $schema: z.string().optional(),
   hideDeniedTools: z.boolean().optional(),
   bashSafety: bashSafetySchema.optional(),
   permission: permissionSchema.optional(),
   agents: z.record(z.string().min(1), agentSchema).optional(),
+  profiles: z.record(profileNameSchema, profileSchema).optional(),
+  defaultProfile: profileNameSchema.optional(),
 });
 type RawPolicyConfig = z.infer<typeof configSchema>;
 
@@ -175,6 +198,55 @@ export function applyAgentPolicy(config: PolicyConfig, principal: string): Polic
   return { ...config, permission };
 }
 
+/** True when a surface is denied outright rather than through a rule map.
+ *  Drives both profile tightening and denied-tool hiding, which must agree. */
+export function isPermanentDeny(policy: SurfacePolicy | undefined): boolean {
+  return policy === "deny" || (typeof policy === "object" && policy !== null && "deny" in policy);
+}
+
+/** Layer an autonomy profile over the resolved permission set.
+ *
+ *  A profile may only widen what is *asked*, never what is *denied*:
+ *  - a surface denied outright is left untouched, so an overlay cannot dissolve a
+ *    scalar `deny` into a rule map (which would also un-hide the tool);
+ *  - every `deny` rule already present in the base is re-appended after the overlay, so a
+ *    broader overlay pattern can never shadow a narrower project or global denial;
+ *  - `bashSafety` floors merge to the most restrictive of the two.
+ */
+export function applyProfile(config: PolicyConfig, profile: ProfileName): PolicyConfig {
+  const overlay = config.profiles[profile];
+  if (!overlay) return config;
+
+  const overlayPermission = overlay.permission
+    ? Object.fromEntries(
+        Object.entries(overlay.permission).filter(([surface]) => !isPermanentDeny(config.permission[surface])),
+      )
+    : undefined;
+  const permission = mergePermissions(config.permission, overlayPermission);
+
+  // Last matching rule wins, so re-inserting base denials puts them beyond overlay reach.
+  for (const [surface, basePolicy] of Object.entries(config.permission)) {
+    if (!isRuleMap(basePolicy)) continue;
+    const merged = permission[surface];
+    if (!isRuleMap(merged)) continue;
+    for (const [pattern, decision] of Object.entries(basePolicy)) {
+      if (!isPermanentDeny(decision)) continue;
+      delete merged[pattern];
+      merged[pattern] = decision;
+    }
+  }
+
+  return {
+    ...config,
+    permission,
+    bashSafety: {
+      ...config.bashSafety,
+      customEnvironment: mostRestrictivePolicy(config.bashSafety.customEnvironment, overlay.bashSafety?.customEnvironment),
+      pty: mostRestrictivePolicy(config.bashSafety.pty, overlay.bashSafety?.pty),
+    },
+  };
+}
+
 export interface LoadedConfig {
   config: PolicyConfig;
   globalPath: string;
@@ -189,18 +261,32 @@ export async function loadPolicyConfig(extensionDir: string, cwd: string): Promi
     readConfig(projectPath, false),
   ]);
   if (!globalConfig) throw new Error(`Missing required bash policy config ${globalPath}`);
+  const emptyProfiles: Record<ProfileName, ProfileConfig> = { low: {}, medium: {}, high: {} };
   const base: PolicyConfig = {
     $schema: globalConfig.$schema,
     hideDeniedTools: globalConfig.hideDeniedTools ?? true,
     bashSafety: resolveBashSafety(globalConfig.bashSafety),
     permission: globalConfig.permission ?? { "*": "allow", bash: { "*": "ask" } },
     agents: globalConfig.agents ?? {},
+    profiles: { ...emptyProfiles, ...globalConfig.profiles },
+    defaultProfile: globalConfig.defaultProfile ?? "low",
   };
   const agents = { ...base.agents };
   for (const [name, override] of Object.entries(projectConfig?.agents ?? {})) {
     const inherited = agents[name];
     agents[name] = {
       permission: mergePermissions(inherited?.permission ?? {}, override.permission),
+    };
+  }
+  const profiles = { ...base.profiles };
+  for (const name of PROFILE_ORDER) {
+    const override = projectConfig?.profiles?.[name];
+    if (!override) continue;
+    const inherited = profiles[name];
+    profiles[name] = {
+      description: override.description ?? inherited.description,
+      permission: mergePermissions(inherited.permission ?? {}, override.permission),
+      bashSafety: { ...inherited.bashSafety, ...override.bashSafety },
     };
   }
   const config: PolicyConfig = projectConfig
@@ -210,6 +296,8 @@ export async function loadPolicyConfig(extensionDir: string, cwd: string): Promi
         bashSafety: mergeBashSafety(base.bashSafety, projectConfig.bashSafety),
         permission: mergePermissions(base.permission, projectConfig.permission),
         agents,
+        profiles,
+        defaultProfile: projectConfig.defaultProfile ?? base.defaultProfile,
       }
     : base;
 

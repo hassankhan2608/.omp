@@ -24,3 +24,16 @@ agent/last-changelog-version
 
 # Secrets
 .env
+
+# Generated blobs and cached data
+agent/blobs/
+
+# Built extension bundles
+agent/extensions/*.zip
+
+# Runtime state at repo root
+autoqa.db
+cache/
+puppeteer/
+plugins/
+plugins/node_modules/

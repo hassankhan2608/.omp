@@ -13,7 +13,6 @@ lsp:
 defaultThinkingLevel: auto
 hideThinkingBlock: false
 extensions: 
-  - ~/.omp/agent/extensions/permission-gate/src/permission-gate.ts
   - ~/.omp/agent/extensions/terminal-bell/src/index.ts
 disabledExtensions: 
   - extension-module:bash-policy

@@ -305,11 +305,11 @@
       "**/.env.sample"
     ],
     "externalDirectory": "ask",
-    "externalAllowlist": [],
-    "externalReadAllowlist": [
+    "externalAllowlist": [
       "/tmp",
       "/tmp/*"
-    ]
+    ],
+    "externalReadAllowlist": []
   },
   "customEnvironment": "ask",
   "pty": "ask"

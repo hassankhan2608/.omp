@@ -331,10 +331,10 @@ describe("configuration and shell safety", () => {
     const rules = defaultConfig().paths;
     expect((await assessPath(".env.example", project, project, rules)).policy).toBe("allow");
     expect((await assessPath("alias", project, project, rules)).policy).toBe("deny");
-    expect((await assessPath(join(outside, "report.txt"), project, project, rules)).policy).toBe("ask");
+    expect((await assessPath("/var/tmp/permission-gate-report.txt", project, project, rules)).policy).toBe("ask");
   });
 
-  test("allows canonical temporary paths for reads but not writes or symlink escapes", async () => {
+  test("allows canonical temporary paths for reads and writes without allowing symlink escapes", async () => {
     const root = await temporaryDirectory();
     const project = join(root, "project");
     const scratch = join(root, "scratch.txt");
@@ -342,7 +342,7 @@ describe("configuration and shell safety", () => {
     await Promise.all([mkdir(project), writeFile(scratch, "temporary"), symlink("/etc/hosts", escaped)]);
     const rules = defaultConfig().paths;
     expect((await assessPath(scratch, project, project, rules, "read")).policy).toBe("allow");
-    expect((await assessPath(scratch, project, project, rules, "write")).policy).toBe("ask");
+    expect((await assessPath(scratch, project, project, rules, "write")).policy).toBe("allow");
     expect((await assessPath(escaped, project, project, rules, "read")).policy).toBe("ask");
   });
 });

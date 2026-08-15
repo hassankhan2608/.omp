@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.invalid/omp-permission-gate/config.schema.json",
+  "title": "OMP Permission Gate configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "defaultLevel",
+    "profiles",
+    "commandBlocklist",
+    "paths",
+    "customEnvironment",
+    "pty"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "defaultLevel": {
+      "$ref": "#/$defs/level",
+      "default": "low"
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "properties": {
+        "low": {
+          "$ref": "#/$defs/profile"
+        },
+        "medium": {
+          "$ref": "#/$defs/profile"
+        },
+        "high": {
+          "$ref": "#/$defs/profile"
+        }
+      }
+    },
+    "commandBlocklist": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "denylist",
+        "allowlist",
+        "externalDirectory",
+        "externalAllowlist",
+        "externalReadAllowlist"
+      ],
+      "properties": {
+        "denylist": {
+          "$ref": "#/$defs/patterns"
+        },
+        "allowlist": {
+          "$ref": "#/$defs/patterns"
+        },
+        "externalDirectory": {
+          "enum": [
+            "allow",
+            "ask",
+            "deny"
+          ]
+        },
+        "externalAllowlist": {
+          "$ref": "#/$defs/patterns"
+        },
+        "externalReadAllowlist": {
+          "$ref": "#/$defs/patterns",
+          "description": "Canonical external paths allowed only to read-only Bash commands."
+        }
+      }
+    },
+    "customEnvironment": {
+      "enum": [
+        "allow",
+        "ask",
+        "deny"
+      ],
+      "default": "ask"
+    },
+    "pty": {
+      "enum": [
+        "allow",
+        "ask",
+        "deny"
+      ],
+      "default": "ask"
+    }
+  },
+  "$defs": {
+    "level": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowlist",
+        "denylist"
+      ],
+      "properties": {
+        "allowlist": {
+          "$ref": "#/$defs/patterns"
+        },
+        "denylist": {
+          "$ref": "#/$defs/patterns"
+        }
+      }
+    }
+  }
+}

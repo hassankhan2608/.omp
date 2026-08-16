@@ -433,4 +433,41 @@ describe("multi-tool, multi-turn, and edge-case behavior", () => {
     await commands.get("undo")!.handler("", context);
     expect(notifications.at(-1)).toContain("Undid user turn 1; restored 0 files");
   });
+  test("undoes file changes produced by bash commands (touch, echo, sed, rm)", async () => {
+    const data = await temporaryDirectory();
+    process.env.XDG_DATA_HOME = data;
+    const worktree = await gitRepository();
+
+    await writeFile(join(worktree, "existing.txt"), "original content\n");
+
+    const snapshots = await SnapshotStore.create(exec, worktree, "bash-test");
+    expect(snapshots).toBeDefined();
+    const before = await snapshots!.capture();
+
+    // Simulate Bash tool execution:
+    // 1. bash: `echo "modified content" > existing.txt`
+    await exec("sh", ["-c", 'echo "modified content" > existing.txt'], { cwd: worktree });
+    // 2. bash: `touch created_by_bash.txt`
+    await exec("sh", ["-c", "touch created_by_bash.txt"], { cwd: worktree });
+    // 3. bash: `mkdir -p sub && echo "nested" > sub/file.txt`
+    await mkdir(join(worktree, "sub"), { recursive: true });
+    await exec("sh", ["-c", 'echo "nested" > sub/file.txt'], { cwd: worktree });
+
+    const after = await snapshots!.capture();
+    const files = await snapshots!.changedFiles(before, after);
+    expect(files.sort()).toEqual(["created_by_bash.txt", "existing.txt", "sub/file.txt"]);
+
+    // Undo -> Revert all file modifications done by bash
+    await snapshots!.restore(before, files);
+
+    expect(await readFile(join(worktree, "existing.txt"), "utf8")).toBe("original content\n");
+    expect(await readFile(join(worktree, "created_by_bash.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+    expect(await readFile(join(worktree, "sub/file.txt"), "utf8").catch(() => undefined)).toBeUndefined();
+
+    // Redo -> Re-apply bash file modifications
+    await snapshots!.restore(after, files);
+    expect(await readFile(join(worktree, "existing.txt"), "utf8")).toBe("modified content\n");
+    expect(await readFile(join(worktree, "created_by_bash.txt"), "utf8")).toBe("");
+    expect(await readFile(join(worktree, "sub/file.txt"), "utf8")).toBe("nested\n");
+  });
 });

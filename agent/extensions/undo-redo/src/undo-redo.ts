@@ -48,23 +48,26 @@ function fileSummary(count: number): string {
 }
 
 export default function undoRedoExtension(pi: ExtensionAPI): void {
-  const runtimes = new Map<string, RuntimeState>();
+  const runtimes = new Map<string, Promise<RuntimeState>>();
   const exec: Exec = async (command, args, options) => pi.exec(command, args, options);
 
-  const runtimeFor = async (ctx: ExtensionContext): Promise<RuntimeState> => {
+  const runtimeFor = (ctx: ExtensionContext): Promise<RuntimeState> => {
     const key = sessionKey(ctx);
-    const existing = runtimes.get(key);
-    if (existing) return existing;
-
-    const cwd = resolve(ctx.cwd);
-    const path = statePath(cwd, ctx.sessionManager.getSessionId());
-    const state = await loadState(path, cwd);
-    state.cursor = cursorForBranch(state, entryIds(ctx));
-    const snapshots = await SnapshotStore.create(exec, cwd, ctx.sessionManager.getSessionId()).catch(() => undefined);
-    const runtime: RuntimeState = { cwd, path, state, snapshots, tail: Promise.resolve() };
-    runtimes.set(key, runtime);
-    await saveState(path, state);
-    return runtime;
+    let pending = runtimes.get(key);
+    if (!pending) {
+      pending = (async () => {
+        const cwd = resolve(ctx.cwd);
+        const path = statePath(cwd, ctx.sessionManager.getSessionId());
+        const state = await loadState(path, cwd);
+        state.cursor = cursorForBranch(state, entryIds(ctx));
+        const snapshots = await SnapshotStore.create(exec, cwd, ctx.sessionManager.getSessionId()).catch(() => undefined);
+        const runtime: RuntimeState = { cwd, path, state, snapshots, tail: Promise.resolve() };
+        await saveState(path, state);
+        return runtime;
+      })();
+      runtimes.set(key, pending);
+    }
+    return pending;
   };
 
   const exclusive = async <T>(runtime: RuntimeState, operation: () => Promise<T>): Promise<T> => {
@@ -224,7 +227,7 @@ export default function undoRedoExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    const runtime = runtimes.get(sessionKey(ctx));
+    const runtime = await runtimes.get(sessionKey(ctx));
     if (runtime) await exclusive(runtime, async () => saveState(runtime.path, runtime.state));
   });
 

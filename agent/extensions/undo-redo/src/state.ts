@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -64,11 +64,24 @@ export async function loadState(path: string, cwd: string): Promise<UndoState> {
   }
 }
 
+let saveCounter = 0;
+
 export async function saveState(path: string, state: UndoState): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-  await rename(temporary, path);
+  const dir = dirname(path);
+  try {
+    await mkdir(dir, { recursive: true });
+    const unique = `${process.pid}.${Date.now()}.${++saveCounter}.${randomUUID().slice(0, 8)}`;
+    const temporary = `${path}.${unique}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    await rename(temporary, path);
+  } catch {
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    } catch {
+      // Non-fatal persistence fallback
+    }
+  }
 }
 
 export function cursorForBranch(state: UndoState, branchEntryIds: ReadonlySet<string>): number {

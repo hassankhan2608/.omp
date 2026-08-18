@@ -25,6 +25,7 @@ agent/last-changelog-version
 # Secrets
 .env
 agent/secret-placeholder.key
+agent/ssh.json
 
 # Local mnemopi memory banks (private session content)
 agent/memories/

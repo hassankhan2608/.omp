@@ -24,6 +24,10 @@ agent/last-changelog-version
 
 # Secrets
 .env
+agent/secret-placeholder.key
+
+# Local mnemopi memory banks (private session content)
+agent/memories/
 
 # Generated blobs and cached data
 agent/blobs/
@@ -33,6 +37,9 @@ agent/extensions/*.zip
 
 # Runtime state at repo root
 autoqa.db
+stats.db
+stats.db-shm
+stats.db-wal
 cache/
 puppeteer/
 plugins/

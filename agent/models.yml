@@ -1,0 +1,33 @@
+providers:
+  freetheai:
+    baseUrl: https://api.freetheai.xyz/v1
+    api: openai-completions
+    apiKey: FREETHEAI_API_KEY
+    models:
+      - id: yap/kimi-k3
+        name: Kimi K3
+        contextWindow: 400000
+        maxTokens: 32768
+      - id: olm/deepseek-v4-pro
+        name: DeepSeek V4 Pro
+        contextWindow: 400000
+      - id: opc/deepseek-v4-flash-free
+        name: DeepSeek V4 Flash Free (fast)
+        contextWindow: 200000
+        maxTokens: 128000
+      - id: glm/glm-5.2
+        name: GLM 5.2
+        contextWindow: 400000
+        maxTokens: 131072
+      - id: bbl/gpt-5.4-mini
+        name: GPT 5.4 Mini
+        contextWindow: 80000
+        maxTokens: 32000
+  opencode-zen:
+    baseUrl: https://opencode.ai/zen/v1
+    apiKey: public
+    headers:
+      User-Agent: "opencode/stable/0.1.48/opencode-cli"
+      x-opencode-client: "opencode-cli"
+      HTTP-Referer: "https://opencode.ai/"
+      X-Title: "opencode"

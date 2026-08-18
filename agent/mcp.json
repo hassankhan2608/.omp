@@ -1,11 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
   "mcpServers": {
-    "grep-app": {
-      "type": "http",
-      "url": "https://mcp.grep.app",
-      "enabled": true
-    },
     "context7": {
       "command": "npx",
       "args": [
@@ -22,38 +17,9 @@
       ],
       "enabled": true
     },
-    "firecrawl-mcp": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "firecrawl-mcp"
-      ],
-      "env": {
-        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"
-      },
-      "enabled": true
-    },
-    "knowledge-graph-memory": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-knowledge-graph",
-        "--memory-path",
-        "/home/laughingman/.aim"
-      ],
-      "enabled": true
-    },
     "axiom": {
       "type": "http",
       "url": "https://mcp.axiom.co/mcp",
-      "enabled": false
-    },
-    "playwright": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@playwright/mcp@latest"
-      ],
       "enabled": false
     },
     "mongodb-flobridge": {
@@ -87,7 +53,7 @@
         "CLICKHOUSE_SECURE": "${CLICKHOUSE_SECURE}",
         "CLICKHOUSE_VERIFY": "${CLICKHOUSE_VERIFY}"
       },
-      "enabled": false
+      "enabled": true
     },
     "StitchMCP": {
       "command": "npx",
@@ -106,6 +72,11 @@
         "git+https://github.com/googlecolab/colab-mcp"
       ],
       "timeout": 30000,
+      "enabled": false
+    },
+    "vercel": {
+      "type": "http",
+      "url": "https://mcp.vercel.com",
       "enabled": false
     }
   }

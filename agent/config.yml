@@ -1,46 +1,96 @@
 symbolPreset: nerd
-theme: 
+theme:
   dark: anthracite
 setupVersion: 1
-modelRoles: 
-  vision: google-antigravity/gemini-3.1-flash-lite
-  smol: opencode-zen/mimo-v2.5-free:medium
+modelRoles:
+  vision: google-antigravity/gemini-3.7-flash-tiered
+  smol: google-antigravity/gemini-3.7-flash-tiered
   default: opencode-zen/deepseek-v4-flash-free
   commit: opencode-zen/deepseek-v4-flash-free
   advisor: google-antigravity/gemini-3.6-flash
-lsp: 
+  slow: opencode-zen/hy3-free
+  tiny: google-antigravity/gemini-3.7-flash-tiered
+lsp:
   formatOnWrite: true
 defaultThinkingLevel: auto
 hideThinkingBlock: false
-extensions: 
-  - ~/.omp/agent/extensions/terminal-bell/src/index.ts
-disabledExtensions: 
+extensions:
+  - ~/.omp/agent/extensions/terminal-bell/src/terminal-bell.ts
+disabledExtensions:
   - extension-module:bash-policy
-github: 
+github:
   enabled: true
-browser: 
+browser:
   headless: false
-dev: 
+  relay: false
+  relayUrl: ""
+  enabled: true
+dev:
   autoqaConsent: granted
-tui: 
+tui:
   textSizing: false
-display: 
+  hyperlinks: "off"
+display:
   showTokenUsage: true
-providers: 
+  shimmer: classic
+  cacheMissMarker: true
+providers:
   tts: auto
-  imageOrder: 
+  imageOrder:
     - openai-codex
     - antigravity
   webSearchGeminiModel: gemini-3.6-flash
-  webSearchOrder: 
-    - gemini
+  webSearchOrder:
     - firecrawl
+    - gemini
+    - exa
     - duckduckgo
-    - startpage
-    - ecosia
-speech: 
+speech:
   voice: af_heart
-generate_image: 
-  enabled: true
-statusLine: 
+generate_image:
+  enabled: false
+statusLine:
   compactThinkingLevel: true
+  showHookStatus: true
+  preset: custom
+  leftSegments:
+    - model
+    - mode
+    - path
+    - git
+  rightSegments:
+    - session_name
+    - context_pct
+    - cost
+  separator: powerline-thin
+  transparent: true
+  sessionAccent: true
+autoResume: false
+task:
+  enableLsp: true
+security:
+  enabled: true
+memory:
+  backend: mnemopi
+shellMinimizer:
+  sourceOutlineLevel: aggressive
+astGrep:
+  enabled: false
+grep:
+  enabled: true
+doubleEscapeAction: tree
+secrets:
+  enabled: true
+checkpoint:
+  enabled: true
+terminal:
+  showProgress: false
+mcp:
+  notifications: false
+title:
+  refreshOnReplan: false
+retry:
+  fallbackChains:
+    google-antigravity/gemini-3.1-flash-lite:
+      - google-antigravity/gemini-3.7-flash-tiered
+  usageAwareFallback: true

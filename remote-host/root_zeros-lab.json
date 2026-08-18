@@ -1,0 +1,7 @@
+{
+  "version": 4,
+  "os": "linux",
+  "shell": "bash",
+  "transferShell": "sh",
+  "compatEnabled": false
+}

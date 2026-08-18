@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "marketplaces": [
+    {
+      "name": "superpowers-marketplace",
+      "sourceType": "github",
+      "sourceUri": "obra/superpowers-marketplace",
+      "catalogPath": "/home/laughingman/.omp/plugins/cache/marketplaces/superpowers-marketplace/marketplace.json",
+      "addedAt": "2026-08-17T10:06:59.293Z",
+      "updatedAt": "2026-08-17T10:06:59.293Z"
+    }
+  ]
+}

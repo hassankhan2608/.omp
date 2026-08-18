@@ -155,6 +155,7 @@ export function mergePermissions(base: PermissionConfig, override: PermissionCon
   return merged;
 }
 
+
 const defaultBashSafety: BashSafetyConfig = {
   customEnvironment: "ask",
   pty: "ask",

@@ -1,0 +1,19 @@
+{
+  "providers": {
+    "opencode-zen": {
+      "strategy": "auto-rotate"
+    },
+    "freetheai": {
+      "strategy": "pinned",
+      "node": "coolify"
+    }
+  },
+  "refreshIntervalMinutes": 5,
+  "defaultCooldownMinutes": 60,
+  "sshUsers": [
+    "root",
+    "ubuntu"
+  ],
+  "includeLocalRoute": true,
+  "probeTimeoutMs": 12000
+}

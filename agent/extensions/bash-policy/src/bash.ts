@@ -231,29 +231,60 @@ function commandPaths(unit: BashCommandUnit): string[] {
   return candidates.filter(looksLikePath);
 }
 
+function lastCommand(node: Node): Node | undefined {
+  if (node.type === "command") return node;
+  for (let index = node.childCount - 1; index >= 0; index--) {
+    const child = node.child(index);
+    if (!child?.isNamed) continue;
+    const command = lastCommand(child);
+    if (command) return command;
+  }
+  return undefined;
+}
+
+function hasFilesystemRedirect(node: Node): boolean {
+  for (let index = 0; index < node.childCount; index++) {
+    const child = node.child(index);
+    if (!child?.isNamed || !/redirect/.test(child.type)) continue;
+    const destination = child.childForFieldName("destination");
+    if (!destination || destination.type === "number" || destination.text === "-") continue;
+    if (destination.text === "/dev/null") continue;
+    return true;
+  }
+  return false;
+}
+
 function walkCommands(
   node: Node,
   units: BashCommandUnit[],
-  redirected = false,
+  redirectTargets: readonly Node[] = [],
   backgrounded = false,
 ): void {
-  const nextRedirected = redirected || node.type === "redirected_statement";
+  let nextRedirectTargets = redirectTargets;
+  if (node.type === "redirected_statement" && hasFilesystemRedirect(node)) {
+    const body = node.childForFieldName("body");
+    const target = body ? lastCommand(body) : undefined;
+    if (target) nextRedirectTargets = [...redirectTargets, target];
+  }
   const nextBackgrounded = backgrounded || node.type === "backgrounded_statement";
 
   if (node.type === "command") {
     const text = node.text.trim();
     const { executable, words } = commandParts(text);
+    const redirected = nextRedirectTargets.some(
+      (target) => target.startIndex === node.startIndex && target.endIndex === node.endIndex,
+    );
     units.push({
       text,
       executable,
       arguments: words.slice(1),
-      forceAskReason: commandForceAskReason(text, nextRedirected, nextBackgrounded),
+      forceAskReason: commandForceAskReason(text, redirected, nextBackgrounded),
     });
   }
 
   for (let index = 0; index < node.childCount; index++) {
     const child = node.child(index);
-    if (child?.isNamed) walkCommands(child, units, nextRedirected, nextBackgrounded);
+    if (child?.isNamed) walkCommands(child, units, nextRedirectTargets, nextBackgrounded);
   }
 }
 
@@ -261,7 +292,9 @@ function collectRedirectPaths(node: Node, paths: string[]): void {
   if (/redirect/.test(node.type)) {
     const words = shellWords(node.text.replace(/^\d*[<>]+&?/, "").trim());
     const candidate = words.at(-1);
-    if (candidate && !/^\d+$/.test(candidate) && candidate !== "-") paths.push(candidate);
+    if (candidate && !/^\d+$/.test(candidate) && candidate !== "-" && candidate !== "/dev/null") {
+      paths.push(candidate);
+    }
   }
   for (let index = 0; index < node.childCount; index++) {
     const child = node.child(index);

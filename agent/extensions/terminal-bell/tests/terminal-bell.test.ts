@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { DEFAULT_CONFIG, loadConfig, type BellConfig } from "../src/config";
-import { classifyAgentEnd, registerBellHandlers } from "../src/index";
+import { classifyAgentEnd, registerBellHandlers } from "../src/terminal-bell";
 import { buildPlayCommand, TerminalNotifier } from "../src/notifier";
 
 const temporaryDirectories: string[] = [];

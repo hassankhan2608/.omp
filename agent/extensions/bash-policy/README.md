@@ -184,6 +184,8 @@ A complete configuration has this shape:
   },
   "permission": {
     "*": "allow",
+    "edit": "allow",
+    "write": "allow",
     "bash": {
       "*": "ask",
       "ls": "allow",
@@ -211,17 +213,16 @@ A complete configuration has this shape:
       }
     }
   },
-  "defaultProfile": "medium",
+  "defaultProfile": "low",
   "profiles": {
     "low": {
-      "description": "Most prompts. Reads stay automatic; every mutation asks.",
-      "permission": { "write": "ask", "edit": "ask" },
-      "bashSafety": { "customEnvironment": "deny" }
+      "description": "Reads and known check-only developer commands."
     },
-    "medium": { "description": "Balanced." },
+    "medium": {
+      "description": "Adds reversible workspace changes, builds, tests, and local Git."
+    },
     "high": {
-      "description": "Fewest prompts. Adds routine build and test commands.",
-      "permission": { "bash": { "npm test *": "allow", "make *": "allow" } }
+      "description": "Allows everything except explicit denies and ask carve-outs."
     }
   }
 }
@@ -289,25 +290,28 @@ Later scopes override or append rules from earlier scopes. Within a rule map, th
 
 The supplied `config.json` defaults unknown Bash commands to `ask`.
 
-Representative auto-allowed commands include:
+Representative commands automatically allowed by the base policy include:
 
-- file readers/listing: `ls`, `cat`, `head`, `tail`, `less`, `file`, `stat`, `wc`, `tree`, `pwd`;
+- file readers/listing: `cd`, `ls`, `cat`, `head`, `tail`, `less`, `file`, `stat`, `wc`, `tree`, `pwd`, `readlink`, `realpath`;
+- text/data processing: `printf`, `sort`, `tr`, `diff`, `cmp`, `comm`, `paste`, `jq`, and checksum tools;
 - lookup/search: `which`, `whereis`, `type`, `rg`, `grep`, `find`, `fd`, `ag`, `ack`, `locate`;
-- Git reads: `git status`, `git diff`, `git log`, `git show`, `git blame`, `git rev-parse`, `git ls-files`, `git ls-tree`, selected read-only branch/tag forms;
-- environment/process reads: `env`, `printenv`, `ps`, `pgrep`;
+- Git reads: `git status`, `git diff`, `git log`, `git show`, `git blame`, `git rev-parse`, `git ls-files`, `git ls-tree`, and explicit read-only branch/tag forms;
+- system reads: `env`, `printenv`, `ps`, `pgrep`, `uname`, `whoami`, `id`, `nproc`, `uptime`, `free`, `df`, `du`, `lsblk`, `lscpu`;
 - network reads: HEAD-only `curl`, bounded `ping`, `host`, `dig`, `nslookup`;
 - package metadata: selected `npm`, `yarn`, `pip`, `cargo`, and `go list` forms.
 
-A command such as `git commit -m "fix"` is not auto-allowed and therefore asks.
+The default `low` profile additionally allows full `curl` GET-style calls and known check-only forms for Prettier, TypeScript, ESLint, Biome, Oxlint, Ruff, Black, and mypy. It does not allow arbitrary package executors or language eval commands.
 
-Read-only prefixes are hardened against mutating or executing options. Examples forced to at least `ask` include:
+Read-looking prefixes are hardened against mutating or executing options. Examples forced to at least `ask` include:
 
 - `find ... -delete`, `-exec`, `-execdir`, `-ok`, or `-okdir`;
 - `fd -x`, `fd -X`, `--exec`, or `--exec-batch`;
 - `git diff/log/show --output` or `--ext-diff`;
 - mutating `git branch` and `git tag` options;
-- `curl` output, upload, request, data, or config options;
-- output-writing options for `tree` and `less`;
+- `curl` output, upload, request, data, credential, header, or config options;
+- output-writing options for `sort`, `diff`, `tree`, and `less`;
+- formatter/linter `--write`, `--fix`, cache, and in-place modes;
+- TypeScript build metadata/trace output;
 - execution or overlay options for `go list`.
 
 ## Autonomy profiles
@@ -316,18 +320,17 @@ Three switchable profiles set how often the policy prompts. The level describes 
 
 | Profile | Prompting | Effect |
 | --- | --- | --- |
-| `low` | most | Reads stay automatic. `edit`, `write`, and `task` ask. Environment and process reads ask. Custom `env` is denied outright. |
-| `medium` | balanced | The shipped allow-list above. Reads automatic; writes and exec ask. |
-| `high` | fewest | Adds routine build, test, format, and staging commands: `npm test`, `npm run *`, `bun test`, `cargo test`, `go test`, `make`, `pytest`, `tsc`, `prettier`, `eslint`, `git add`, `git commit`, `git pull`, `mkdir`, `touch`, `cp`, `mv`. |
+| `low` | most | `read`, `write`, `edit`, and other OMP tools remain allowed. Bash reads and explicit check-only formatter/linter/type-check forms run automatically; arbitrary executors, builds, tests, package changes, and local Git mutations ask. |
+| `medium` | balanced | Adds reversible workspace changes, package-manager commands, builds, tests, local Git changes, and direct language/tool execution. Pushes, forced cleanup, privilege escalation, container control, and similar operations still ask. |
+| `high` | fewest | Allows unmatched Bash commands, including `rm` and `git push`, while keeping configured ask carve-outs such as `sudo`, service/cloud/firewall/user administration, and permanent disk-operation denies. |
 
-`defaultProfile` in `config.json` picks the starting profile (`medium` when unset). A project file may override both the default and any profile's rules.
+`defaultProfile` in `config.json` picks the starting profile (`low` when unset). A project file may override both the default and any profile's rules.
 
 ### Switching mid-session
 
-- `/permissions` — pick a profile from a list showing the active one.
-- **Shift+Tab** — cycle `low → medium → high → low`.
+- `/permissions` — use OMP's native radio-list dialog to pick `low`, `medium`, or `high`.
 
-The active profile shows in the footer as `perm:<name>`. Switching profiles **keeps existing session grants**: patterns you explicitly approved stay approved.
+No shortcut is registered: Shift+Tab belongs to OMP's built-in thinking-level control. The active profile shows in the footer as `perm:<name>`. Switching profiles keeps existing session grants.
 
 ### What profiles cannot do
 
@@ -335,11 +338,12 @@ No profile relaxes a safety floor. At every level, including `high`:
 
 - catastrophic denies stay denied (`rm -rf /`, fork bombs, `curl | sh`);
 - sensitive-path denies stay denied (`.ssh`, `.env`, credential files);
-- explicit `{"deny": "reason"}` rules stay denied;
-- `bashSafety` command floors still apply — `git diff --output=/tmp/patch` asks at `high`;
-- destructive commands stay asking — `git push`, `git push --force`, and `rm` are absent from the `high` allow-list by design.
+- global or project `{"deny": "reason"}` rules stay denied;
+- `bashSafety` command floors still apply — `git diff --output=/tmp/patch` and formatter `--write`/`--fix` modes ask;
+- custom environment and PTY floors still apply;
+- configured `high` ask carve-outs still ask.
 
-`high` is deliberately not a yolo mode. Profile overlays merge with last-match-wins precedence and `bashSafety` policies merge to the **most restrictive** of base and overlay, so an overlay can only tighten those floors.
+Profile overlays may widen `ask` rules, but base denies are re-appended after the overlay and safety policies merge to the most restrictive value.
 
 ## Tree-sitter Bash parsing
 
@@ -366,7 +370,9 @@ The extension forces wrappers to at least `ask` when the real execution cannot b
 - `bash -c`, `sh -c`, and other shell `-c` programs;
 - `sudo`, `doas`, `su`, `env`, `command`, `eval`, `exec`;
 - `xargs`, GNU `parallel`, `watch`, `timeout`, `nice`, `nohup`, `setsid`, `chroot`;
-- output redirection and background execution.
+- filesystem redirection and background execution.
+
+Descriptor-only routing such as `2>&1`, `>&2`, and `/dev/null` does not create a filesystem-write floor. In a redirected compound list, the floor is attributed only to the final command owning the redirect.
 
 ## Permanent catastrophic denies
 
@@ -385,39 +391,25 @@ These checks run before interactive approval. There is no approval button for a 
 
 ## Session approvals
 
-An `ask` decision opens a two-stage flow modeled on OpenCode's permission engine.
+An ordinary permission `ask` opens a two-stage flow modeled on OpenCode's permission engine.
 
-**Stage one** offers:
+**Stage one** uses OMP's native radio-list dialog:
 
 1. **Approve once** — allow this call only;
 2. **Allow for this session** — open stage two;
 3. **Deny** — block it.
 
-**Stage two** lists every unit the call needs, so a compound command is approved piece by piece instead of as one opaque string:
+**Stage two** uses OMP's native checkbox-list dialog. It shows each distinct grant pattern once, reports already-allowed command units in the title, and offers:
 
-```text
-△ Allow for this session
-  git pull && git commit -m x && git push
-  ────────────────────────────────────────
-  ● git diff --stat a.js          already allowed
-  ☐ git commit -m x               git commit *
-  ☐ git push                      git push *
-  ────────────────────────────────────────
-  › Allow All
-    Allow Exact
-    Apply Selected
-    Back
-    Deny
-  ↑/↓ move  Space/Enter toggle or select  Esc back
-```
+- **Allow all patterns** — store every offered pattern;
+- **Apply selected patterns** — store only checked patterns;
+- **Allow only this exact request** — store the exact tool input and working-directory context;
+- **Back** / Escape — return to stage one;
+- **Deny** — block the call.
 
-- `●` rows are already permitted and are not selectable.
-- `☐` rows are selectable with **Space** or **Enter**; the trailing text is the pattern that would be stored.
-- **Allow All** stores every offered pattern. **Apply Selected** stores only the checked ones.
-- **Allow Exact** stores just this exact tool input, granting no pattern.
-- **Back** and **Esc** return to stage one; **Deny** blocks the call.
+Because both stages use `ui.select`, navigation, mouse handling, search, selection markers, outlines, and colors follow the active OMP theme instead of a custom key parser or renderer.
 
-Stored patterns are derived from a command-arity table, so the grant matches the command a human would recognize rather than the literal string:
+Stored patterns are derived from a command-arity table:
 
 | Command | Stored pattern |
 | --- | --- |
@@ -428,7 +420,9 @@ Stored patterns are derived from a command-arity table, so the grant matches the
 
 External paths are scoped to their containing directory, matching OpenCode: approving `/srv/shared/app/config.json` stores `/srv/shared/app/*`.
 
-A session grant may lift a permission `ask` to `allow`. It can never lift a `deny`, bypass a catastrophic deny, or silence a `bashSafety` floor — floors are evaluated before grants are consulted, so a granted `git diff *` still asks for `git diff --output=…`. Filesystem grants resolve through canonical targets, so retargeting a symlink asks again. **Allow Exact** grants remain bound to the exact tool input and working directory. Grants are removed on session shutdown and are never written to disk.
+A session grant may lift a permission `ask` to `allow`. It can never lift a deny, bypass a catastrophic deny, or silence a `bashSafety`, indirection, malformed-input, PTY, custom-environment, or unresolved-path floor. Floor-caused asks expose only **Approve once** and **Deny**; exact and pattern persistence are intentionally unavailable.
+
+Grants are committed before the serialized approval queue advances, so a waiting request covered by the new grant resolves without another dialog. A denial cancels requests already waiting in that queue. Filesystem grants resolve through canonical targets, so retargeting a symlink asks again. Grants are removed on session shutdown and are never written to disk.
 
 ## Sensitive paths
 
@@ -558,13 +552,13 @@ OMP task subagents run headless, so they cannot display their own approval dialo
 4. the parent UI displays `Subagent <principal>: Allow <tool>?`;
 5. the parent's choice resolves the child tool call.
 
-Concurrent requests are serialized so dialogs do not overlap. If no interactive parent is registered, the child fails closed and the request is denied.
+Concurrent requests are serialized so dialogs do not overlap. Grants are persisted before the next waiter runs; a covered waiter resolves without a duplicate dialog. Denying one request cancels requests already waiting in the broker queue. If no interactive parent is registered, a child fails closed.
 
 Forwarding covers OMP's in-process `task` subagents. It does not forward across unrelated OMP processes or remote machines.
 
 ## Approval timeout versus Bash timeout
 
-OMP 17.0.7 counts time spent in an extension UI dialog against its generic 30-second handler watchdog. This extension raises that process-wide watchdog to JavaScript's maximum safe timer delay, approximately 24.8 days.
+OMP counts time spent in an extension UI dialog against its generic extension-handler watchdog. This extension raises that process-wide watchdog to JavaScript's maximum safe timer delay, approximately 24.8 days.
 
 This affects the time available to answer the approval dialog. It does **not** grant the shell command a 24.8-day runtime.
 
@@ -592,7 +586,7 @@ From the extension directory:
 cd ~/.omp/agent/extensions/bash-policy
 bun test
 bun x tsc --noEmit
-bun build src/index.ts --outdir=/tmp/bash-policy-build --target=bun
+bun build src/bash-policy.ts --outdir=/tmp/bash-policy-build --target=bun
 ```
 
 The tests cover:
@@ -610,10 +604,11 @@ The tests cover:
 - parent forwarding and session rule matching;
 - command-arity pattern derivation and external-directory scoping;
 - profile overlays, including that no profile relaxes a deny or safety floor;
-- mid-session profile cycling with session grants preserved;
-- the stage-two picker's real render and key handling (toggle, Allow All, Apply Selected, Escape);
+- native `/permissions` switching with session grants preserved and no shortcut collision;
+- the stage-two picker's native checkbox markers, toggling, deduplication, exact selection, and Escape behavior;
+- queued approval grant reuse and denial cancellation;
 - grant reuse across later commands and sibling files inside a granted directory;
-- that a session grant cannot silence a `bashSafety` floor, and a configured `deny` outranks an `ask` floor.
+- one-shot-only safety-floor approvals and configured-deny precedence.
 
 Manual smoke checks after restarting OMP:
 
@@ -628,8 +623,8 @@ Manual smoke checks after restarting OMP:
 | `find . -delete` | Asks. |
 | `sudo rm -rf /` | Denied with no approval option. |
 | `ls; git commit -m "test"` | Asks; stage two lists both units, with `ls` already allowed. |
-| Shift+Tab to `high`, then `npm test` | Runs without prompting. |
-| Shift+Tab to `high`, then `git push` | Still asks. |
+| Use `/permissions` to select `high`, then run `npm test` | Runs without prompting. |
+| Use `/permissions` to select `high`, then run `git push` | Runs unless a project/global deny or safety floor applies. |
 
 Use a disposable Git repository for commit tests.
 

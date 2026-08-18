@@ -5,7 +5,7 @@
   "type": "module",
   "omp": {
     "extensions": [
-      "./src/index.ts"
+      "./src/terminal-bell.ts"
     ]
   },
   "dependencies": {

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIDialogOptions } from "@oh-my-pi/pi-coding-agent";
-import extension from "../src/index";
+import extension from "../src/bash-policy";
 import { analyzeBash } from "../src/bash";
 import { applyAgentPolicy, applyProfile, loadPolicyConfig, type PermissionConfig } from "../src/config";
 import { bashAlwaysPattern, externalAlwaysPattern } from "../src/patterns";
@@ -68,7 +68,7 @@ function sessionApprover(id: string, cwd: string): { ctx: ExtensionContext; prom
   const ctx = context(id, cwd, true, async (_prompt, options) => {
     if (options.includes("Approve once")) {
       prompts++;
-      return "Allow for this session";
+      return options.includes("Allow for this session") ? "Allow for this session" : "Approve once";
     }
     // Stage two: take every offered pattern, else settle for an exact grant.
     return options.includes("Allow all patterns") ? "Allow all patterns" : "Allow only this exact request";
@@ -79,7 +79,7 @@ function sessionApprover(id: string, cwd: string): { ctx: ExtensionContext; prom
 type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
 interface FakeExtension {
   handlers: Map<string, ExtensionHandler>;
-  commands: Map<string, { handler: (ctx: ExtensionContext) => Promise<void> }>;
+  commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>;
   shortcuts: Map<string, { handler: (ctx: ExtensionContext) => Promise<void> }>;
   activeTools: string[];
   api: ExtensionAPI;
@@ -101,7 +101,7 @@ function fakeExtension(): FakeExtension {
     },
     setLabel: () => undefined,
     on: (event: string, handler: ExtensionHandler) => handlers.set(event, handler),
-    registerCommand: (name: string, options: { handler: (ctx: ExtensionContext) => Promise<void> }) => {
+    registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
       state.commands.set(name, options);
     },
     registerShortcut: (key: string, options: { handler: (ctx: ExtensionContext) => Promise<void> }) => {
@@ -162,6 +162,7 @@ describe("policy matching and configuration", () => {
 
     const loaded = await loadPolicyConfig(extensionDirectory, project);
     expect(loaded.config.hideDeniedTools).toBe(false);
+    expect(loaded.config.defaultProfile).toBe("low");
     expect(loaded.config.bashSafety.customEnvironment).toBe("ask");
     expect(loaded.config.bashSafety.commands.find).toHaveLength(2);
     const scout = applyAgentPolicy(loaded.config, "scout");
@@ -207,6 +208,21 @@ describe("tree-sitter Bash security", () => {
     ]);
   });
 
+  test("attributes redirection only to its final command", async () => {
+    const result = await analyzeBash(
+      "cd /home/laughingman/repos/FLOBRIDGE-2.0 && bunx prettier --check src/a.ts 2>&1 | tail -3",
+    );
+    expect(result.commands.map((command) => [command.executable, command.forceAskReason])).toEqual([
+      ["cd", undefined],
+      ["bunx", undefined],
+      ["tail", undefined],
+    ]);
+    const devNull = await analyzeBash("echo hi 2>/dev/null");
+    expect(devNull.commands[0]!.forceAskReason).toBeUndefined();
+    expect(devNull.paths).not.toContain("/dev/null");
+    expect((await analyzeBash("echo hi > out.txt")).commands[0]!.forceAskReason).toBe("Shell redirection");
+  });
+
   test("floors opaque and execution wrappers to ask", async () => {
     for (const command of [
       "bash -c 'echo hidden'",
@@ -224,9 +240,6 @@ describe("tree-sitter Bash security", () => {
   test("uses structured config for dangerous command modes", async () => {
     const cwd = await temporaryDirectory();
     const { config } = await loadPolicyConfig(dirname(import.meta.dir), cwd);
-    const safeFind = (await analyzeBash("find . -name '*.ts'")).commands[0]!;
-    expect(resolveCommandSafety(config.bashSafety, safeFind)).toBeUndefined();
-
     const dangerous = [
       "find . -delete",
       "find . -exec rm {} ;",
@@ -243,6 +256,17 @@ describe("tree-sitter Bash security", () => {
       "git branch -vd old",
       "git tag -ld old",
       "curl -ILo output https://example.invalid",
+      "sort -o output.txt input.txt",
+      "diff --output=patch left right",
+      "date --set=tomorrow",
+      "bunx prettier --write src",
+      "bun x eslint --fix src",
+      "prettier --write src",
+      "eslint --fix src",
+      "biome check --write src",
+      "oxlint --fix src",
+      "ruff check --fix src",
+      "tsc --noEmit --incremental",
       "go list -toolexec=helper ./...",
       "cargo tree",
     ];
@@ -468,7 +492,6 @@ describe("runtime integration", () => {
       rules: [{ surface: "bash", pattern: "git commit *" }],
       exact: false,
     });
-    addSessionRules(child, [{ surface: "bash", pattern: "git commit *" }]);
     expect(sessionAllows(child, "bash", "git commit -m y")).toBe(true);
     expect(sessionAllows(child, "bash", "git push")).toBe(false);
     unregisterSession(child);
@@ -517,6 +540,13 @@ describe("autonomy profiles", () => {
       expect(bash(profile, "git diff --stat")).toBe("allow");
       expect(bash(profile, "rg pattern src")).toBe("allow");
     }
+    expect(bash(low, "git branch --show-current")).toBe("allow");
+    expect(bash(low, "sort package.json")).toBe("allow");
+    expect(bash(low, "jq '.name' package.json")).toBe("allow");
+    expect(bash(low, "bunx prettier --check src")).toBe("allow");
+    expect(bash(low, "bunx cowsay hello")).toBe("ask");
+    expect(bash(low, "bun -e 'Bun.write(\"out\", \"x\")'")).toBe("ask");
+    expect(bash(low, "timeout 60 bun test")).toBe("ask");
 
     // low: reads only. medium: reversible work. high: everything not carved out.
     expect([bash(low, "npm test"), bash(medium, "npm test"), bash(high, "npm test")]).toEqual(["ask", "allow", "allow"]);
@@ -539,17 +569,21 @@ describe("autonomy profiles", () => {
     }
   });
 
-  test("cycles profiles on demand without dropping session grants", async () => {
+  test("switches profiles through the native command without shortcut conflicts or dropping grants", async () => {
     const cwd = await temporaryDirectory();
     await mkdir(join(cwd, ".omp"));
     await writeFile(join(cwd, ".omp", "bash-policy.json"), JSON.stringify({ defaultProfile: "medium" }));
-    const ctx = context("profile-cycle", cwd, true);
+    let profileChoice = "high";
+    const ctx = context("profile-cycle", cwd, true, async (prompt) =>
+      prompt === "Permission profile" ? profileChoice : undefined,
+    );
     const fake = fakeExtension();
     await start(fake, ctx);
 
     const toolCall = fake.handlers.get("tool_call")!;
-    const cycle = fake.shortcuts.get("shift+tab")!;
-    expect(fake.commands.has("permissions")).toBe(true);
+    const permissions = fake.commands.get("permissions")!;
+    expect(permissions).toBeDefined();
+    expect(fake.shortcuts.has("shift+tab")).toBe(false);
 
     // medium: `git push` needs approval, and this context answers nothing, so it blocks.
     expect(await toolCall({ toolName: "bash", input: { command: "git push" } }, ctx)).toEqual({
@@ -559,12 +593,13 @@ describe("autonomy profiles", () => {
     addSessionRules(ctx, [{ surface: "bash", pattern: "git commit *" }]);
 
     // medium -> high: push is now automatic.
-    await cycle.handler(ctx);
+    await permissions.handler("", ctx);
     expect(await toolCall({ toolName: "bash", input: { command: "git push" } }, ctx)).toBeUndefined();
     expect(sessionAllows(ctx, "bash", "git commit -m x")).toBe(true);
 
     // high -> low: reversible work needs approval again, and the grant still stands.
-    await cycle.handler(ctx);
+    profileChoice = "low";
+    await permissions.handler("", ctx);
     expect(await toolCall({ toolName: "bash", input: { command: "npm test" } }, ctx)).toEqual({
       block: true,
       reason: "Denied by user: npm test",
@@ -586,14 +621,15 @@ describe("session-scope picker", () => {
   }
 
   /** Script both stages and capture every dialog the extension opened. */
-  async function run(items: ApprovalItem[], answers: string[], requiresExact = false) {
+  async function run(items: ApprovalItem[], answers: string[], requiresExact = false, persistable = true) {
     const dialogs: Dialog[] = [];
+    const sessionId = `picker-${Math.random()}`;
     let turn = 0;
     const ctx = {
       cwd: "/tmp",
       hasUI: true,
       getSystemPrompt: () => [],
-      sessionManager: { getSessionId: () => `picker-${Math.random()}` },
+      sessionManager: { getSessionId: () => sessionId },
       ui: {
         notify: () => undefined,
         setStatus: () => undefined,
@@ -619,14 +655,15 @@ describe("session-scope picker", () => {
       principal: "main",
       items,
       requiresExact,
+      persistable,
     });
     return { result, dialogs, ctx };
   }
 
   const compound = (): ApprovalItem[] => [
-    { label: "git diff --stat a.js", allowed: true },
-    { label: "git commit -m x", allowed: false, rule: { surface: "bash", pattern: "git commit *" } },
-    { label: "git push", allowed: false, rule: { surface: "bash", pattern: "git push *" } },
+    { label: "git diff --stat a.js", value: "git diff --stat a.js", allowed: true },
+    { label: "git commit -m x", value: "git commit -m x", allowed: false, rule: { surface: "bash", pattern: "git commit *" } },
+    { label: "git push", value: "git push", allowed: false, rule: { surface: "bash", pattern: "git push *" } },
   ];
 
   test("stage two offers patterns with native checkbox markers", async () => {
@@ -699,12 +736,14 @@ describe("session-scope picker", () => {
     expect(dialogs.filter((d) => d.marker === "radio")).toHaveLength(2);
   });
 
-  test("Allow only this exact request grants no pattern", async () => {
-    const { result } = await run(compound(), [
+  test("Allow only this exact request persists no pattern", async () => {
+    const { result, ctx } = await run(compound(), [
       "Allow for this session",
       "Allow only this exact request",
     ]);
     expect(result).toEqual({ kind: "exact" });
+    expect(hasExactGrant(ctx, "picker")).toBe(true);
+    expect(sessionAllows(ctx, "bash", "git push")).toBe(false);
   });
 
   test("a request with no grantable pattern offers no checkbox rows", async () => {
@@ -717,10 +756,84 @@ describe("session-scope picker", () => {
     expect(result).toEqual({ kind: "exact" });
   });
 
+  test("deduplicates identical session patterns", async () => {
+    const duplicate = [
+      { label: "git push origin main", value: "git push origin main", allowed: false, rule: { surface: "bash", pattern: "git push *" } },
+      { label: "git push --tags", value: "git push --tags", allowed: false, rule: { surface: "bash", pattern: "git push *" } },
+    ] satisfies ApprovalItem[];
+    const { dialogs } = await run(duplicate, ["Allow for this session", "Deny"]);
+    expect(dialogs[1]!.markableCount).toBe(1);
+    expect(dialogs[1]!.options[0]).toBe("git push *");
+  });
+
+  test("safety-floor asks offer one-shot approval only", async () => {
+    const { result, dialogs, ctx } = await run([
+      { label: "git diff --output=patch", value: "git diff --output=patch", allowed: false },
+    ], ["Approve once"], true, false);
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0]!.options).toEqual(["Approve once", "Deny"]);
+    expect(result).toEqual({ kind: "once" });
+    expect(hasExactGrant(ctx, "picker")).toBe(false);
+  });
+
   test("an unrecognized answer backs out instead of looping", async () => {
     // A surface that keeps answering the same way must terminate, not hang.
     const { result } = await run(compound(), ["Allow for this session", "something-else", "Deny"]);
     expect(result).toEqual({ kind: "deny" });
+  });
+});
+
+describe("approval queue", () => {
+  const approval = (key: string) => ({
+    key,
+    title: "Allow bash?",
+    description: "git push",
+    principal: "main",
+    items: [{
+      label: "git push origin main",
+      value: "git push origin main",
+      allowed: false,
+      rule: { surface: "bash", pattern: "git push *" },
+    }],
+  });
+
+  test("reuses a grant before releasing the next queued request", async () => {
+    let dialogs = 0;
+    const ctx = context("queue-grant", "/tmp", true, async (_prompt, options) => {
+      dialogs++;
+      return options.includes("Allow all patterns") ? "Allow all patterns" : "Allow for this session";
+    });
+    const [first, second] = await Promise.all([
+      requestApproval(ctx, approval("queue-grant-1")),
+      requestApproval(ctx, approval("queue-grant-2")),
+    ]);
+    expect(first.kind).toBe("rules");
+    expect(second).toEqual({ kind: "once" });
+    expect(dialogs).toBe(2);
+    unregisterSession(ctx);
+  });
+
+  test("one denial cancels requests already waiting in the queue", async () => {
+    let choose!: (choice: string) => void;
+    let opened!: () => void;
+    let dialogs = 0;
+    const dialogOpened = new Promise<void>((resolve) => {
+      opened = resolve;
+    });
+    const ctx = context("queue-deny", "/tmp", true, async () => {
+      dialogs++;
+      opened();
+      return new Promise<string>((resolve) => {
+        choose = resolve;
+      });
+    });
+    const first = requestApproval(ctx, approval("queue-deny-1"));
+    const second = requestApproval(ctx, approval("queue-deny-2"));
+    await dialogOpened;
+    choose("Deny");
+    expect(await Promise.all([first, second])).toEqual([{ kind: "deny" }, { kind: "deny" }]);
+    expect(dialogs).toBe(1);
+    unregisterSession(ctx);
   });
 });
 
@@ -798,12 +911,13 @@ describe("end-to-end grant reuse", () => {
     expect(await toolCall({ toolName: "bash", input: { command: "git diff --stat" } }, ctx)).toBeUndefined();
     expect(prompts()).toBe(0);
 
-    // Approving `git diff *` cannot silence the bashSafety floor: each dangerous form
-    // asks again rather than riding the earlier grant.
+    // Safety-floor asks are one-shot only: even the identical request asks again.
     await toolCall({ toolName: "bash", input: { command: "git diff --output=/tmp/patch" } }, ctx);
     expect(prompts()).toBe(1);
-    await toolCall({ toolName: "bash", input: { command: "git diff --ext-diff" } }, ctx);
+    await toolCall({ toolName: "bash", input: { command: "git diff --output=/tmp/patch" } }, ctx);
     expect(prompts()).toBe(2);
+    await toolCall({ toolName: "bash", input: { command: "git diff --ext-diff" } }, ctx);
+    expect(prompts()).toBe(3);
     await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
   });
 });

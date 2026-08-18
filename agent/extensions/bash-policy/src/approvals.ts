@@ -9,6 +9,7 @@ export interface SessionRule {
 export interface ApprovalItem {
   label: string;
   description?: string;
+  value?: string;
   allowed: boolean;
   rule?: SessionRule;
 }
@@ -20,6 +21,7 @@ export interface ApprovalRequest {
   principal: string;
   items: ApprovalItem[];
   requiresExact?: boolean;
+  persistable?: boolean;
 }
 
 export type ApprovalResult =
@@ -37,14 +39,15 @@ interface ApprovalBroker {
   parentSessionId?: string;
   parentUi?: ExtensionUIContext;
   queue: Promise<void>;
+  denialEpoch: number;
   grants: Map<string, SessionGrants>;
 }
 
-const BROKER_SYMBOL = Symbol.for("omp.bash-policy.approval-broker.v2");
+const BROKER_SYMBOL = Symbol.for("omp.bash-policy.approval-broker.v3");
 
 function broker(): ApprovalBroker {
   const processGlobal = globalThis as typeof globalThis & { [BROKER_SYMBOL]?: ApprovalBroker };
-  processGlobal[BROKER_SYMBOL] ??= { queue: Promise.resolve(), grants: new Map() };
+  processGlobal[BROKER_SYMBOL] ??= { queue: Promise.resolve(), denialEpoch: 0, grants: new Map() };
   return processGlobal[BROKER_SYMBOL];
 }
 
@@ -126,8 +129,20 @@ async function selectSessionRules(
   ui: ExtensionUIContext,
   request: ApprovalRequest,
 ): Promise<SelectorResult> {
-  const grantable = request.items.filter((item) => item.rule !== undefined && !item.allowed);
-  const already = request.items.filter((item) => item.allowed);
+  const seenRules = new Set<string>();
+  const grantable = request.items.filter((item) => {
+    if (item.rule === undefined || item.allowed) return false;
+    const key = `${item.rule.surface}\0${item.rule.pattern}`;
+    if (seenRules.has(key)) return false;
+    seenRules.add(key);
+    return true;
+  });
+  const seenAllowed = new Set<string>();
+  const already = request.items.filter((item) => {
+    if (!item.allowed || seenAllowed.has(item.label)) return false;
+    seenAllowed.add(item.label);
+    return true;
+  });
   const checked = new Set<number>();
   let cursor = 0;
 
@@ -179,12 +194,35 @@ async function selectSessionRules(
   }
 }
 
-/** Serialize both approval stages and forward headless subagent asks to the parent UI. */
+function requestCovered(ctx: ExtensionContext, request: ApprovalRequest): boolean {
+  if (hasExactGrant(ctx, request.key)) return true;
+  const pending = request.items.filter((item) => !item.allowed);
+  return pending.length > 0 && pending.every(
+    (item) => item.rule !== undefined
+      && sessionAllows(ctx, item.rule.surface, item.value ?? item.label),
+  );
+}
+
+function persistApproval(ctx: ExtensionContext, request: ApprovalRequest, result: ApprovalResult): void {
+  if (request.persistable === false) return;
+  if (result.kind === "exact") {
+    addExactGrant(ctx, request.key);
+    return;
+  }
+  if (result.kind !== "rules") return;
+  addSessionRules(ctx, result.rules);
+  if (result.exact) addExactGrant(ctx, request.key);
+}
+
+/** Serialize both approval stages and forward headless subagent asks to the parent UI.
+ *  Grants are committed before the queue is released, so later queued requests can reuse
+ *  them. A denial invalidates requests that were already waiting, but not future asks. */
 export async function requestApproval(ctx: ExtensionContext, request: ApprovalRequest): Promise<ApprovalResult> {
   const state = broker();
   const ui = ctx.hasUI ? ctx.ui : state.parentUi;
   if (!ui) return { kind: "deny" };
 
+  const queuedAtDenialEpoch = state.denialEpoch;
   let releaseQueue!: () => void;
   const previous = state.queue;
   state.queue = new Promise<void>((resolve) => {
@@ -193,6 +231,9 @@ export async function requestApproval(ctx: ExtensionContext, request: ApprovalRe
   await previous;
 
   try {
+    if (state.denialEpoch !== queuedAtDenialEpoch) return { kind: "deny" };
+    if (request.persistable !== false && requestCovered(ctx, request)) return { kind: "once" };
+
     const forwarded = !ctx.hasUI;
     const heading = forwarded ? `Subagent ${request.principal}: ${request.title}` : request.title;
     process.emit("omp:approval-requested", {
@@ -201,30 +242,49 @@ export async function requestApproval(ctx: ExtensionContext, request: ApprovalRe
       description: request.description,
       principal: request.principal,
     });
+    const stageOne = request.persistable === false
+      ? ["Approve once", "Deny"]
+      : ["Approve once", "Allow for this session", "Deny"];
     // Bounded so a non-advancing surface (or a scripted client that always answers
     // the same way) fails closed instead of looping between the two stages forever.
     for (let round = 0; round < MAX_APPROVAL_ROUNDS; round++) {
       const choice = await ui.select(
         `${heading}\n${request.description}`,
-        ["Approve once", "Allow for this session", "Deny"],
+        stageOne,
         {
           outline: true,
           selectionMarker: "radio",
-          markableCount: 3,
+          markableCount: stageOne.length,
           helpText: "up/down navigate  enter select  esc deny",
         },
       );
       if (choice === "Approve once") return { kind: "once" };
-      if (choice === "Deny" || choice === undefined) return { kind: "deny" };
+      if (choice === "Deny" || choice === undefined) {
+        state.denialEpoch++;
+        return { kind: "deny" };
+      }
+      if (choice !== "Allow for this session" || request.persistable === false) {
+        state.denialEpoch++;
+        return { kind: "deny" };
+      }
+
 
       const selection = await selectSessionRules(ui, request);
       if (selection.kind === "back") continue;
-      if (selection.kind === "deny") return { kind: "deny" };
-      if (selection.kind === "exact") return { kind: "exact" };
-      return { kind: "rules", rules: selection.rules ?? [], exact: selection.exact === true };
+      if (selection.kind === "deny") {
+        state.denialEpoch++;
+        return { kind: "deny" };
+      }
+      const result: ApprovalResult = selection.kind === "exact"
+        ? { kind: "exact" }
+        : { kind: "rules", rules: selection.rules ?? [], exact: selection.exact === true };
+      persistApproval(ctx, request, result);
+      return result;
     }
+    state.denialEpoch++;
     return { kind: "deny" };
   } catch {
+    state.denialEpoch++;
     return { kind: "deny" };
   } finally {
     releaseQueue();

@@ -67,5 +67,5 @@ Restart OMP after changing extension code or configuration.
 ```bash
 bun test
 bun x tsc --noEmit
-bun build src/index.ts --outdir=/tmp/omp-terminal-bell-build --target=bun
+bun build src/terminal-bell.ts --outdir=/tmp/omp-terminal-bell-build --target=bun
 ```

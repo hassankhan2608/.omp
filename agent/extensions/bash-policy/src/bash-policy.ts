@@ -18,8 +18,6 @@ import { resolvePolicy, stricterDecision, type PolicyDecision } from "./policy";
 import { bashAlwaysPattern, externalAlwaysPattern } from "./patterns";
 import { detectPrincipal } from "./principal";
 import {
-  addExactGrant,
-  addSessionRules,
   hasExactGrant,
   registerInteractiveSession,
   requestApproval,
@@ -126,14 +124,6 @@ export default function bashPolicy(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerShortcut("shift+tab", {
-    description: "Cycle bash-policy autonomy profile",
-    handler: async (ctx) => {
-      const runtime = await initialize(ctx);
-      const next = PROFILE_ORDER[(PROFILE_ORDER.indexOf(runtime.profile) + 1) % PROFILE_ORDER.length]!;
-      await setProfile(ctx, next);
-    },
-  });
 
   pi.on("session_start", async (_event, ctx) => {
     registerInteractiveSession(ctx);
@@ -182,10 +172,12 @@ export default function bashPolicy(pi: ExtensionAPI): void {
     const isBash = event.toolName === "bash";
     let analysis: BashAnalysis | undefined;
     /** Per-command approval rows, in parse order, for the session-scope picker. */
-    const commandItems: { unit: BashCommandUnit; allowed: boolean }[] = [];
+    const commandItems: { unit: BashCommandUnit; allowed: boolean; grantable: boolean }[] = [];
+    let approvalPersistable = true;
 
     if (isBash) {
       for (const toolSafety of resolveBashToolSafety(config.bashSafety, input)) {
+        if (toolSafety.policy === "ask") approvalPersistable = false;
         decision = stricterDecision(decision, {
           policy: toolSafety.policy,
           surface: "bashSafety",
@@ -199,6 +191,7 @@ export default function bashPolicy(pi: ExtensionAPI): void {
         if (analysis.catastrophicReason) {
           decision = denyDecision("bash", value, analysis.catastrophicReason);
         } else if (analysis.malformed) {
+          approvalPersistable = false;
           decision = askDecision("bash", value, "Malformed or incomplete Bash syntax");
         }
 
@@ -221,6 +214,7 @@ export default function bashPolicy(pi: ExtensionAPI): void {
             : command.forceAskReason
               ? askDecision("bash", command.text, command.forceAskReason)
               : undefined;
+          if (floor?.policy === "ask") approvalPersistable = false;
 
           // A grant substitutes only for the permission verdict, never for the floor.
           const granted = floor === undefined && sessionAllows(ctx, "bash", command.text);
@@ -229,10 +223,15 @@ export default function bashPolicy(pi: ExtensionAPI): void {
             : resolvePolicy(config.permission, "bash", command.text);
           const commandDecision = floor ? stricterDecision(permissionDecision, floor) : permissionDecision;
 
-          commandItems.push({ unit: command, allowed: commandDecision.policy === "allow" });
+          commandItems.push({
+            unit: command,
+            allowed: commandDecision.policy === "allow",
+            grantable: floor === undefined,
+          });
           decision = stricterDecision(decision, commandDecision);
         }
       } catch (error) {
+        approvalPersistable = false;
         decision = askDecision("bash", value, `Bash parser unavailable: ${(error as Error).message}`);
       }
     } else {
@@ -257,12 +256,14 @@ export default function bashPolicy(pi: ExtensionAPI): void {
           externalItems.push({
             label: path,
             description: pattern,
+            value: assessment.canonical,
             allowed: false,
             rule: { surface: "external_directory", pattern },
           });
         }
         decision = stricterDecision(decision, assessment.decision);
       } catch (error) {
+        approvalPersistable = false;
         pathContexts.push(`${path}=>unresolved`);
         decision = stricterDecision(
           decision,
@@ -278,16 +279,17 @@ export default function bashPolicy(pi: ExtensionAPI): void {
     }
 
     const approvalKey = `${ctx.cwd}\u0000${baseCwd}\u0000${event.toolName}\u0000${JSON.stringify(input)}\u0000${pathContexts.sort().join("\u0000")}`;
-    if (hasExactGrant(ctx, approvalKey)) return;
+    if (approvalPersistable && hasExactGrant(ctx, approvalKey)) return;
 
     const items: ApprovalItem[] = [
-      ...commandItems.map(({ unit, allowed }) => {
+      ...commandItems.map(({ unit, allowed, grantable }) => {
         const pattern = bashAlwaysPattern(unit);
         return {
           label: unit.text,
           description: allowed ? undefined : pattern,
+          value: unit.text,
           allowed,
-          ...(allowed ? {} : { rule: { surface: "bash", pattern } }),
+          ...(!allowed && grantable ? { rule: { surface: "bash", pattern } } : {}),
         } satisfies ApprovalItem;
       }),
       ...externalItems,
@@ -307,15 +309,10 @@ export default function bashPolicy(pi: ExtensionAPI): void {
       principal: runtime.principal,
       items,
       requiresExact: items.every((item) => item.rule === undefined),
+      persistable: approvalPersistable,
     });
 
-    if (approved.kind === "once") return;
-    if (approved.kind === "deny") return { block: true, reason: `Denied by user: ${value}` };
-    if (approved.kind === "exact") {
-      addExactGrant(ctx, approvalKey);
-      return;
-    }
-    addSessionRules(ctx, approved.rules);
-    if (approved.exact) addExactGrant(ctx, approvalKey);
+    if (approved.kind === "once" || approved.kind === "exact" || approved.kind === "rules") return;
+    return { block: true, reason: `Denied by user: ${value}` };
   });
 }

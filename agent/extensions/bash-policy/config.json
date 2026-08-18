@@ -423,6 +423,132 @@
           ]
         }
       ],
+      "sort": [
+        {
+          "policy": "ask",
+          "reason": "sort can write output to a file",
+          "arguments": [
+            "--output"
+          ],
+          "shortFlags": [
+            "o"
+          ]
+        }
+      ],
+      "diff": [
+        {
+          "policy": "ask",
+          "reason": "diff can write comparison output to a file",
+          "arguments": [
+            "--output"
+          ]
+        }
+      ],
+      "date": [
+        {
+          "policy": "ask",
+          "reason": "date can change the system clock",
+          "arguments": [
+            "--set"
+          ],
+          "shortFlags": [
+            "s"
+          ]
+        }
+      ],
+      "bunx": [
+        {
+          "policy": "ask",
+          "reason": "formatter and linter write or fix mode can modify workspace files",
+          "subcommands": [
+            "prettier",
+            "eslint",
+            "biome",
+            "oxlint",
+            "ruff",
+            "black"
+          ],
+          "arguments": [
+            "--write",
+            "--fix",
+            "--in-place"
+          ]
+        }
+      ],
+      "bun": [
+        {
+          "policy": "ask",
+          "reason": "formatter and linter write or fix mode can modify workspace files",
+          "subcommands": [
+            "x"
+          ],
+          "arguments": [
+            "--write",
+            "--fix",
+            "--in-place"
+          ]
+        }
+      ],
+      "prettier": [
+        {
+          "policy": "ask",
+          "reason": "prettier write mode modifies workspace files",
+          "arguments": [
+            "--write"
+          ]
+        }
+      ],
+      "eslint": [
+        {
+          "policy": "ask",
+          "reason": "eslint fix or cache mode writes workspace files",
+          "arguments": [
+            "--fix",
+            "--cache"
+          ]
+        }
+      ],
+      "biome": [
+        {
+          "policy": "ask",
+          "reason": "biome write or fix mode modifies workspace files",
+          "arguments": [
+            "--write",
+            "--fix"
+          ]
+        }
+      ],
+      "oxlint": [
+        {
+          "policy": "ask",
+          "reason": "oxlint fix mode modifies workspace files",
+          "arguments": [
+            "--fix"
+          ]
+        }
+      ],
+      "ruff": [
+        {
+          "policy": "ask",
+          "reason": "ruff fix mode modifies workspace files",
+          "arguments": [
+            "--fix",
+            "--unsafe-fixes"
+          ]
+        }
+      ],
+      "tsc": [
+        {
+          "policy": "ask",
+          "reason": "TypeScript build metadata and traces write workspace files",
+          "arguments": [
+            "--incremental",
+            "--composite",
+            "--generateTrace",
+            "--tsBuildInfoFile"
+          ]
+        }
+      ],
       "go": [
         {
           "policy": "ask",
@@ -469,7 +595,65 @@
     "write": "allow",
     "bash": {
       "*": "ask",
+      "cd": "allow",
       "cd *": "allow",
+      "printf": "allow",
+      "printf *": "allow",
+      "sort": "allow",
+      "sort *": "allow",
+      "tr": "allow",
+      "tr *": "allow",
+      "diff": "allow",
+      "diff *": "allow",
+      "cmp": "allow",
+      "cmp *": "allow",
+      "comm": "allow",
+      "comm *": "allow",
+      "paste": "allow",
+      "paste *": "allow",
+      "jq": "allow",
+      "jq *": "allow",
+      "md5sum": "allow",
+      "md5sum *": "allow",
+      "sha1sum": "allow",
+      "sha1sum *": "allow",
+      "sha224sum": "allow",
+      "sha224sum *": "allow",
+      "sha256sum": "allow",
+      "sha256sum *": "allow",
+      "sha384sum": "allow",
+      "sha384sum *": "allow",
+      "sha512sum": "allow",
+      "sha512sum *": "allow",
+      "b2sum": "allow",
+      "b2sum *": "allow",
+      "uname": "allow",
+      "uname *": "allow",
+      "whoami": "allow",
+      "id": "allow",
+      "id *": "allow",
+      "nproc": "allow",
+      "nproc *": "allow",
+      "uptime": "allow",
+      "uptime *": "allow",
+      "free": "allow",
+      "free *": "allow",
+      "df": "allow",
+      "df *": "allow",
+      "du": "allow",
+      "du *": "allow",
+      "lsblk": "allow",
+      "lsblk *": "allow",
+      "lscpu": "allow",
+      "lscpu *": "allow",
+      "readlink": "allow",
+      "readlink *": "allow",
+      "realpath": "allow",
+      "realpath *": "allow",
+      "date": "allow",
+      "date *": "allow",
+      "sleep": "allow",
+      "sleep *": "allow",
       "ls": "allow",
       "ls *": "allow",
       "cat": "allow",
@@ -528,6 +712,18 @@
       "git branch": "allow",
       "git branch -a": "allow",
       "git branch -v*": "allow",
+      "git branch -r": "allow",
+      "git branch --all": "allow",
+      "git branch --remotes": "allow",
+      "git branch --show-current": "allow",
+      "git branch --list*": "allow",
+      "git branch --contains*": "allow",
+      "git branch --no-contains*": "allow",
+      "git branch --merged*": "allow",
+      "git branch --no-merged*": "allow",
+      "git branch --points-at*": "allow",
+      "git branch --sort*": "allow",
+      "git branch --format*": "allow",
       "git remote -v": "allow",
       "git tag": "allow",
       "git tag -l*": "allow",
@@ -632,56 +828,38 @@
   "defaultProfile": "low",
   "profiles": {
     "low": {
-      "description": "File edits, read-only git, format/lint/type-check, quick eval, and API queries.",
+      "description": "File edits, read-only commands, check-only developer tools, and GET-style API queries.",
       "permission": {
         "bash": {
           "curl *": "allow",
-          "git diff": "allow",
-          "git diff *": "allow",
-          "git log": "allow",
-          "git log *": "allow",
-          "git show": "allow",
-          "git show *": "allow",
-          "git status": "allow",
-          "git status *": "allow",
-          "git blame": "allow",
-          "git blame *": "allow",
-          "git branch": "allow",
-          "git branch -a": "allow",
-          "git branch -v*": "allow",
-          "git ls-files": "allow",
-          "git ls-files *": "allow",
-          "git ls-tree": "allow",
-          "git ls-tree *": "allow",
-          "git rev-parse": "allow",
-          "git rev-parse *": "allow",
-          "git remote -v": "allow",
-          "git tag": "allow",
-          "git tag -l*": "allow",
-          "git tag --list*": "allow",
-          "git tag --contains*": "allow",
-          "git tag --points-at*": "allow",
-          "bunx *": "allow",
-          "prettier *": "allow",
-          "tsc": "allow",
-          "tsc *": "allow",
-          "biome check*": "allow",
-          "biome format*": "allow",
-          "biome lint*": "allow",
-          "oxlint *": "allow",
-          "eslint *": "allow",
+          "bunx prettier --check*": "allow",
+          "bunx prettier --list-different*": "allow",
+          "bun x prettier --check*": "allow",
+          "bun x prettier --list-different*": "allow",
           "prettier --check*": "allow",
-          "ruff *": "allow",
-          "black *": "allow",
-          "mypy *": "allow",
-          "timeout *": "allow",
-          "jq": "allow",
-          "jq *": "allow",
-          "sleep *": "allow",
-          "bun -e *": "allow",
-          "node -e *": "allow",
-          "python -c *": "allow",
-          "python3 -c *": "allow"
+          "prettier --list-different*": "allow",
+          "bunx tsc --noEmit*": "allow",
+          "bun x tsc --noEmit*": "allow",
+          "tsc --noEmit*": "allow",
+          "bunx eslint *": "allow",
+          "bun x eslint *": "allow",
+          "eslint *": "allow",
+          "bunx biome check*": "allow",
+          "bunx biome lint*": "allow",
+          "bun x biome check*": "allow",
+          "bun x biome lint*": "allow",
+          "biome check*": "allow",
+          "biome lint*": "allow",
+          "bunx oxlint *": "allow",
+          "bun x oxlint *": "allow",
+          "oxlint *": "allow",
+          "bunx ruff check*": "allow",
+          "bunx ruff format --check*": "allow",
+          "ruff check*": "allow",
+          "ruff format --check*": "allow",
+          "bunx black --check*": "allow",
+          "black --check*": "allow",
+          "mypy *": "allow"
         }
       }
     },

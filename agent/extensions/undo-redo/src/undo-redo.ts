@@ -1,13 +1,18 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   AgentEndEvent,
   BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  KeyId,
 } from "@oh-my-pi/pi-coding-agent";
+import { loadConfigSync, type UndoRedoConfig } from "./config";
 import { SnapshotStore, type Exec } from "./snapshot.ts";
 import { cursorForBranch, loadState, saveState, statePath, type UndoState, type UndoTurn } from "./state.ts";
+
+const EXTENSION_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
 interface PendingTurn {
   prompt: string;
@@ -47,9 +52,10 @@ function fileSummary(count: number): string {
   return count === 1 ? "1 file" : `${count} files`;
 }
 
-export default function undoRedoExtension(pi: ExtensionAPI): void {
+export default function undoRedoExtension(pi: ExtensionAPI, extensionDirectory: string = EXTENSION_DIR): void {
   const runtimes = new Map<string, Promise<RuntimeState>>();
   const exec: Exec = async (command, args, options) => pi.exec(command, args, options);
+  const shortcutConfig = loadConfigSync(extensionDirectory);
 
   const runtimeFor = (ctx: ExtensionContext): Promise<RuntimeState> => {
     const key = sessionKey(ctx);
@@ -240,4 +246,31 @@ export default function undoRedoExtension(pi: ExtensionAPI): void {
     description: "Redo the next undone user turn and its workspace file changes",
     handler: async (_args, ctx) => move(ctx, "redo"),
   });
+
+  for (const error of shortcutConfig.errors) {
+    pi.logger.warn(`undo-redo config: ${error}`);
+  }
+  registerShortcuts(pi, shortcutConfig.config, move);
+}
+
+/**
+ * Bind the undo/redo commands to keyboard shortcuts from `undo-redo.json`.
+ * Duplicate keys across the two bindings are a config error: log and skip the
+ * later registration rather than let one silently win.
+ */
+function registerShortcuts(
+  pi: ExtensionAPI,
+  config: UndoRedoConfig,
+  move: (ctx: ExtensionCommandContext, direction: "undo" | "redo") => Promise<void>,
+): void {
+  const undo = { description: "Undo the latest user turn", handler: (ctx: ExtensionContext) => move(ctx as ExtensionCommandContext, "undo") };
+  const redo = { description: "Redo the next undone user turn", handler: (ctx: ExtensionContext) => move(ctx as ExtensionCommandContext, "redo") };
+
+  if (config.undoKey === config.redoKey) {
+    pi.logger.warn(`undo-redo config: undoKey and redoKey are both "${config.undoKey}"; redo shortcut skipped`);
+    pi.registerShortcut(config.undoKey as KeyId, undo);
+    return;
+  }
+  pi.registerShortcut(config.undoKey as KeyId, undo);
+  pi.registerShortcut(config.redoKey as KeyId, redo);
 }

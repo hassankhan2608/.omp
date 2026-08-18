@@ -123,6 +123,7 @@ describe("OMP commands", () => {
 
     const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => Promise<void> | void>>();
     const commands = new Map<string, RegisteredCommand>();
+    const shorts = new Map<string, { handler: (ctx: ExtensionContext) => Promise<void> | void }>();
     const notifications: string[] = [];
     let editorText = "";
     let entries: Array<Record<string, unknown>> = [];
@@ -141,6 +142,9 @@ describe("OMP commands", () => {
       },
       registerCommand: (name: string, options: Omit<RegisteredCommand, "name">) => {
         commands.set(name, { name, ...options });
+      },
+      registerShortcut: (key: string, options: { handler: (ctx: ExtensionContext) => Promise<void> | void }) => {
+        shorts.set(key, options);
       },
     } as unknown as ExtensionAPI;
     undoRedoExtension(api);
@@ -210,6 +214,18 @@ describe("OMP commands", () => {
     await commands.get("redo")!.handler("", context);
     expect(notifications.at(-1)).toBe("Nothing to redo");
     expect(await readFile(join(cwd, "app.txt"), "utf8")).toBe("replacement\n");
+
+    // Default shortcuts are registered and invoke the same move logic.
+    expect(shorts.has("alt+u")).toBe(true);
+    expect(shorts.has("alt+r")).toBe(true);
+
+    // Undo via the alt+u shortcut restores the pre-turn file state.
+    await shorts.get("alt+u")!.handler(context as ExtensionContext);
+    expect(await readFile(join(cwd, "app.txt"), "utf8")).toBe("before\n");
+
+    // Redo via the alt+r shortcut re-applies the change.
+    await shorts.get("alt+r")!.handler(context as ExtensionContext);
+    expect(await readFile(join(cwd, "app.txt"), "utf8")).toBe("replacement\n");
   });
 });
 describe("multi-tool, multi-turn, and edge-case behavior", () => {
@@ -266,6 +282,7 @@ describe("multi-tool, multi-turn, and edge-case behavior", () => {
       registerCommand: (name: string, options: Omit<RegisteredCommand, "name">) => {
         commands.set(name, { name, ...options });
       },
+      registerShortcut: () => undefined,
     } as unknown as ExtensionAPI;
     undoRedoExtension(api);
 
@@ -395,6 +412,7 @@ describe("multi-tool, multi-turn, and edge-case behavior", () => {
       registerCommand: (name: string, options: Omit<RegisteredCommand, "name">) => {
         commands.set(name, { name, ...options });
       },
+      registerShortcut: () => undefined,
     } as unknown as ExtensionAPI;
     undoRedoExtension(api);
 

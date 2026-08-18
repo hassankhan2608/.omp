@@ -238,12 +238,12 @@ export default function undoRedoExtension(pi: ExtensionAPI, extensionDirectory: 
   });
 
   pi.registerCommand("undo", {
-    description: "Undo the latest user turn and its workspace file changes",
+    description: `Undo the latest user turn and its workspace file changes (${shortcutConfig.config.undoKey})`,
     handler: async (_args, ctx) => move(ctx, "undo"),
   });
 
   pi.registerCommand("redo", {
-    description: "Redo the next undone user turn and its workspace file changes",
+    description: `Redo the next undone user turn and its workspace file changes (${shortcutConfig.config.redoKey})`,
     handler: async (_args, ctx) => move(ctx, "redo"),
   });
 

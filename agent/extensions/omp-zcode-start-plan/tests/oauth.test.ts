@@ -7,7 +7,7 @@ const tokenPayload = {
   data: {
     token: "plan-jwt",
     zai: { access_token: "provider-oauth-token" },
-    user: { id: "acct-1", email: "one@example.com" },
+    user: { user_id: "acct-1", email: "one@example.com" },
   },
 };
 

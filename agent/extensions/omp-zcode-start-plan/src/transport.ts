@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { release } from "node:os";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import {
   Effort,
   type AssistantMessageEventStream,
@@ -21,10 +23,12 @@ import {
   ZCODE_MESSAGES_URL,
 } from "./constants";
 import { diagnostics, type ZcodeDiagnostics } from "./diagnostics";
+import { buildZcodeSystem } from "./system";
 import { isRecord } from "./type-guards";
 
 const CONFIG_TTL_MS = 60_000;
 const configCache = new WeakMap<FetchImpl, { expiresAt: number; value: Promise<CaptchaSolveConfig> }>();
+
 
 interface ZcodeThinkingOptions {
   requestModelId: "GLM-5.3" | "GLM-5-Turbo";
@@ -57,10 +61,39 @@ export function resolveZcodeThinking(
   return { requestModelId, thinkingEnabled: true, thinkingBudgetTokens: budget, effort };
 }
 
+
+function applyZcodeMessageCacheControl(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) return;
+  const messages = [...payload.messages];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!isRecord(message) || message.role === "system") continue;
+    if (typeof message.content === "string") {
+      messages[index] = {
+        ...message,
+        content: [{ type: "text", text: message.content, cache_control: { type: "ephemeral" } }],
+      };
+      payload.messages = messages;
+      return;
+    }
+    if (!Array.isArray(message.content) || message.content.length === 0) return;
+    const content = [...message.content];
+    const last = content[content.length - 1];
+    if (isRecord(last) && !("cache_control" in last)) {
+      content[content.length - 1] = { ...last, cache_control: { type: "ephemeral" } };
+      messages[index] = { ...message, content };
+      payload.messages = messages;
+    }
+    return;
+  }
+}
+
 export function normalizeZcodePayload(payload: unknown, requestModelId: string): unknown {
   if (!isRecord(payload)) return payload;
   const normalized: Record<string, unknown> = { ...payload, model: requestModelId };
   delete normalized.context_management;
+  normalized.system = buildZcodeSystem(normalized.system, requestModelId);
+  applyZcodeMessageCacheControl(normalized);
 
   if (isRecord(normalized.thinking)) {
     const thinking: Record<string, unknown> = { ...normalized.thinking };
@@ -79,9 +112,9 @@ export function zcodeIdentityHeaders(): Record<string, string> {
     "HTTP-Referer": "https://zcode.z.ai",
     "X-Title": "Z Code@electron",
     "X-ZCode-App-Version": ZCODE_CLIENT_VERSION,
-    "X-ZCode-Release-Channel": "production",
-    "X-ZCode-Client-Language": locale,
-    "X-ZCode-Client-Timezone": timeZone,
+    "X-Release-Channel": "production",
+    "X-Client-Language": locale,
+    "X-Client-Timezone": timeZone,
     "X-Platform": "linux-x64",
     "X-Os-Category": "linux",
     "X-Os-Version": release(),
@@ -92,7 +125,7 @@ export function zcodeIdentityHeaders(): Record<string, string> {
 function requestIdentityHeaders(): Record<string, string> {
   return {
     "X-Request-Id": randomUUID(),
-    "X-Trace-Id": randomUUID(),
+    "X-ZCode-Trace-Id": randomUUID(),
     "X-Query-Id": randomUUID(),
     "X-Session-Id": randomUUID(),
   };
@@ -148,30 +181,36 @@ export function createZcodeFetch(
     headers.delete("x-api-key");
     headers.delete("anthropic-beta");
     headers.delete("x-device-mid");
+    headers.delete("anthropic-dangerous-direct-browser-access");
+    headers.delete("x-app");
+    headers.delete("x-trace-id");
+    headers.delete("x-query-id");
+    headers.delete("x-session-id");
     for (const [key, value] of Object.entries(zcodeIdentityHeaders())) headers.set(key, value);
     for (const [key, value] of Object.entries(requestIdentityHeaders())) headers.set(key, value);
     headers.set("X-Aliyun-Captcha-Verify-Param", verifyParam);
     headers.set("X-Aliyun-Captcha-Verify-Region", config.region);
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
 
     try {
       const response = await baseFetch(input, { ...init, headers });
       const durationMs = performance.now() - startedAt;
       requestDiagnostics.recordRequest({
         endpoint: url,
-        method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+        method,
         headers,
         durationMs,
         status: response.status,
         requestId: response.headers.get("request-id") ?? response.headers.get("x-request-id") ?? undefined,
       });
       if (globalThis.process.env.ZCODE_START_PLAN_DEBUG === "1") {
-        console.error(`[zcode-start-plan] ${response.status} ${Math.round(durationMs)}ms headers=${[...headers.keys()].join(",")}`);
+        console.error(`[zcode-start-plan] ${method} ${new URL(url).pathname} ${response.status} ${Math.round(durationMs)}ms headers=${[...headers.keys()].join(",")}`);
       }
       return response;
     } catch (error) {
       requestDiagnostics.recordRequest({
         endpoint: url,
-        method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+        method,
         headers,
         durationMs: performance.now() - startedAt,
         error: error instanceof Error ? error.name : "UnknownError",
@@ -192,6 +231,17 @@ function mapToolChoice(choice: SimpleStreamOptions["toolChoice"]): AnthropicOpti
   return "auto";
 }
 
+export function buildZcodeAnthropicModel(model: Model<string>): Model<"anthropic-messages"> {
+  const spec = {
+    ...model,
+    api: "anthropic-messages" as const,
+    baseUrl: ZCODE_BASE_URL,
+    compat: model.compatConfig,
+  };
+  // The runtime custom-API model is structurally a spec once its API is projected to Anthropic.
+  return buildModel(spec as unknown as ModelSpec<"anthropic-messages">);
+}
+
 export function streamZcodeStartPlan(
   model: Model<string>,
   context: Context,
@@ -200,24 +250,19 @@ export function streamZcodeStartPlan(
   if (typeof options.apiKey !== "string" || !options.apiKey) {
     throw new Error("ZCode Start Plan requires an authenticated account");
   }
+  const apiKey = options.apiKey;
 
   const thinking = resolveZcodeThinking(
     model.id,
     options.reasoning,
     Boolean(options.disableReasoning || options.forceReasoningOff),
   );
-  const anthropicModelShape = {
-    ...model,
-    api: "anthropic-messages" as const,
-    baseUrl: ZCODE_BASE_URL,
-  };
-  // Extension models are runtime-normalized before dispatch; the public generic does not retain that fact.
-  const anthropicModel = anthropicModelShape as unknown as Model<"anthropic-messages">;
+  const anthropicModel = buildZcodeAnthropicModel(model);
   const userPayloadHook = options.onPayload;
   const anthropicOptions: AnthropicOptions = {
     ...options,
     toolChoice: mapToolChoice(options.toolChoice),
-    apiKey: options.apiKey,
+    apiKey,
     isOAuth: false,
     requestModelId: thinking.requestModelId,
     thinkingEnabled: thinking.thinkingEnabled,
@@ -225,7 +270,7 @@ export function streamZcodeStartPlan(
     effort: thinking.effort,
     headers: {
       ...options.headers,
-      Authorization: `Bearer ${options.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     fetch: createZcodeFetch(options.fetch ?? fetch),
     onPayload: async (payload) => {

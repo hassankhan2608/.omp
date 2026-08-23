@@ -1,16 +1,32 @@
-import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
+import { Effort, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
 import { expect, test } from "bun:test";
 import { ZcodeDiagnostics } from "../src/diagnostics";
 import {
+  buildZcodeAnthropicModel,
   createZcodeFetch,
   normalizeZcodePayload,
   resolveZcodeThinking,
 } from "../src/transport";
+import { ZCODE_MODELS } from "../src/models";
 
 const captchaConfig = {
   code: 0,
   data: { configs: { captcha: { sceneId: "scene", region: "sgp", prefix: "prefix" } } },
 };
+
+test("materializes Anthropic compatibility before native streaming", () => {
+  const model = {
+    ...ZCODE_MODELS[0]!,
+    provider: "zcode-start-plan",
+    api: "zcode-start-plan-anthropic",
+    baseUrl: "https://zcode.z.ai/api/v1/zcode-plan/anthropic",
+  } as unknown as Model<string>;
+
+  expect(buildZcodeAnthropicModel(model).compat).toMatchObject({
+    officialEndpoint: false,
+    supportsEagerToolInputStreaming: false,
+  });
+});
 
 test("maps OMP thinking levels to the exact ZCode budgets", () => {
   expect(resolveZcodeThinking("glm-5.3", Effort.Low, false)).toEqual({
@@ -31,9 +47,13 @@ test("maps OMP thinking levels to the exact ZCode budgets", () => {
   });
 });
 
+
 test("normalizes the Anthropic payload to ZCode desktop parity", () => {
   expect(normalizeZcodePayload({
     model: "glm-5.3",
+    metadata: { trace: "keep" },
+    system: [{ type: "text", text: "User system" }],
+    messages: [{ role: "user", content: "hi" }],
     max_tokens: 128_000,
     thinking: { type: "enabled", budget_tokens: 32_000, display: "summarized" },
     context_management: { edits: [{ type: "clear_thinking_20251015", keep: "all" }] },
@@ -41,6 +61,15 @@ test("normalizes the Anthropic payload to ZCode desktop parity", () => {
     stream: true,
   }, "GLM-5.3")).toEqual({
     model: "GLM-5.3",
+    metadata: { trace: "keep" },
+    messages: [{ role: "user", content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }] }],
+    system: [
+      { type: "text", text: "You are ZCode, an interactive coding agent", cache_control: { type: "ephemeral" } },
+      { type: "text", text: expect.stringContaining("# Harness"), cache_control: { type: "ephemeral" } },
+      { type: "text", text: expect.stringContaining("# Environment"), cache_control: { type: "ephemeral" } },
+      { type: "text", text: "- You are powered by the model named GLM-5.3.", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "User system" },
+    ],
     max_tokens: 128_000,
     thinking: { type: "enabled", budget_tokens: 32_000 },
     output_config: { effort: "max" },
@@ -70,12 +99,21 @@ test("adds fresh verification and exact ZCode identity headers per model request
     "x-api-key": "plan-jwt",
     "anthropic-beta": "effort-2025-11-24",
     "x-device-mid": "must-not-survive",
+    "anthropic-dangerous-direct-browser-access": "true",
+    "x-app": "cli",
   };
   await wrapped("https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages", { method: "POST", headers });
   await wrapped("https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages", { method: "POST", headers });
 
   expect(captured.map((value) => value.get("x-aliyun-captcha-verify-param"))).toEqual(["captcha-1", "captcha-2"]);
   expect(captured[0]?.get("x-aliyun-captcha-verify-region")).toBe("sgp");
+  expect(captured[0]?.get("x-release-channel")).toBe("production");
+  expect(captured[0]?.get("x-zcode-trace-id")).toMatch(/^[0-9a-f-]{36}$/);
+  expect(captured[0]?.has("x-trace-id")).toBe(false);
+  expect(captured[0]?.get("x-query-id")).toMatch(/^[0-9a-f-]{36}$/);
+  expect(captured[0]?.get("x-session-id")).toMatch(/^[0-9a-f-]{36}$/);
+  expect(captured[0]?.has("anthropic-dangerous-direct-browser-access")).toBe(false);
+  expect(captured[0]?.has("x-app")).toBe(false);
   expect(captured[0]?.get("user-agent")).toBe("ZCode/3.8.1");
   expect(captured[0]?.get("x-zcode-agent")).toBe("glm");
   expect(captured[0]?.has("x-api-key")).toBe(false);

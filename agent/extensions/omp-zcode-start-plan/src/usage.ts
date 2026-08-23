@@ -1,10 +1,6 @@
 import { type as schema } from "@oh-my-pi/omptype";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai";
-import {
-  PROVIDER_ID,
-  ZCODE_BILLING_BALANCE_URL,
-  ZCODE_BILLING_CURRENT_URL,
-} from "./constants";
+import { PROVIDER_ID, ZCODE_BILLING_BALANCE_URL, ZCODE_CLIENT_VERSION } from "./constants";
 import { diagnostics } from "./diagnostics";
 import { zcodeIdentityHeaders } from "./transport";
 
@@ -18,11 +14,6 @@ const BalanceSchema = schema({
   "expires_at?": "number | string | null",
 });
 
-const BalanceResponseSchema = schema({
-  code: "number",
-  data: { balances: BalanceSchema.array() },
-});
-
 const PlanSchema = schema({
   "plan_id?": "string",
   "name?": "string",
@@ -31,15 +22,11 @@ const PlanSchema = schema({
   "ends_at?": "number | string | null",
 });
 
-const CurrentResponseSchema = schema({
+const BalanceResponseSchema = schema({
   code: "number",
   data: {
     "plans?": PlanSchema.array(),
-    "plan_id?": "string",
-    "name?": "string",
-    "description?": "string",
-    "status?": "string",
-    "ends_at?": "number | string | null",
+    balances: BalanceSchema.array(),
   },
 });
 
@@ -107,6 +94,8 @@ export function parseBalanceReport(
       status: usageStatus(usedFraction),
     };
   });
+  const plan = activePlan(parsed);
+  const planExpiresAt = timestampMs(plan?.ends_at);
 
   return {
     provider: PROVIDER_ID,
@@ -116,15 +105,18 @@ export function parseBalanceReport(
       ...(identity.accountId ? { accountId: identity.accountId } : {}),
       ...(identity.email ? { email: identity.email } : {}),
       endpoint: ZCODE_BILLING_BALANCE_URL,
+      ...(plan?.plan_id ? { planId: plan.plan_id } : {}),
+      ...(plan?.name ? { planName: plan.name } : {}),
+      ...(plan?.description ? { planDescription: plan.description } : {}),
+      ...(planExpiresAt === undefined ? {} : { planExpiresAt }),
     },
   };
 }
 
-function activePlan(current: typeof CurrentResponseSchema.infer): Plan | undefined {
+function activePlan(current: typeof BalanceResponseSchema.infer): Plan | undefined {
   const plans = current.data.plans;
-  if (plans?.length) return plans.find((plan) => plan.status === "active") ?? plans[0];
-  if (current.data.name || current.data.plan_id) return current.data;
-  return undefined;
+  if (!plans?.length) return undefined;
+  return plans.find((plan) => plan.status === "active") ?? plans[0];
 }
 
 export const zcodeUsageProvider: UsageProvider = {
@@ -145,34 +137,19 @@ export const zcodeUsageProvider: UsageProvider = {
       Authorization: `Bearer ${accessToken}`,
     };
     try {
-      const [currentResponse, balanceResponse] = await Promise.all([
-        ctx.fetch(ZCODE_BILLING_CURRENT_URL, { headers, signal: params.signal }),
-        ctx.fetch(ZCODE_BILLING_BALANCE_URL, { headers, signal: params.signal }),
-      ]);
-      if (!currentResponse.ok || !balanceResponse.ok) {
-        ctx.logger?.warn("ZCode usage endpoint failed", {
-          currentStatus: currentResponse.status,
-          balanceStatus: balanceResponse.status,
-        });
+      const url = new URL(ZCODE_BILLING_BALANCE_URL);
+      url.searchParams.set("app_version", ZCODE_CLIENT_VERSION);
+      const response = await ctx.fetch(url, { headers, signal: params.signal });
+      if (!response.ok) {
+        ctx.logger?.warn("ZCode usage endpoint failed", { status: response.status });
         return null;
       }
-      const current = CurrentResponseSchema.assert(await currentResponse.json());
-      if (current.code !== 0) return null;
       const fetchedAt = Date.now();
-      const report = parseBalanceReport(await balanceResponse.json(), {
+      const report = parseBalanceReport(await response.json(), {
         accountId: params.credential.accountId,
         email: params.credential.email,
       }, fetchedAt);
       if (!report) return null;
-      const plan = activePlan(current);
-      report.metadata = {
-        ...report.metadata,
-        currentEndpoint: ZCODE_BILLING_CURRENT_URL,
-        ...(plan?.plan_id ? { planId: plan.plan_id } : {}),
-        ...(plan?.name ? { planName: plan.name } : {}),
-        ...(plan?.description ? { planDescription: plan.description } : {}),
-        ...(timestampMs(plan?.ends_at) ? { planExpiresAt: timestampMs(plan?.ends_at) } : {}),
-      };
       diagnostics.recordUsage(fetchedAt);
       return report;
     } catch (error) {

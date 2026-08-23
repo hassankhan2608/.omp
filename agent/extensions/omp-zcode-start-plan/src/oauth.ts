@@ -24,7 +24,7 @@ interface ZcodeTokenPayload {
   data?: {
     token?: string;
     zai?: { access_token?: string };
-    user?: { id?: string | number; email?: string };
+    user?: { user_id?: string | number; id?: string | number; email?: string };
   };
 }
 
@@ -58,7 +58,7 @@ export async function exchangeZcodeToken(
   if (!access) throw new Error("ZCode OAuth response did not include the Start Plan JWT");
   const refresh = payload.data?.zai?.access_token;
   if (!refresh) throw new Error("ZCode OAuth response did not include the provider access token");
-  const accountId = payload.data?.user?.id;
+  const accountId = payload.data?.user?.user_id ?? payload.data?.user?.id;
   if (accountId === undefined || accountId === null || String(accountId).length === 0) {
     throw new Error("ZCode OAuth response did not include an account identity");
   }

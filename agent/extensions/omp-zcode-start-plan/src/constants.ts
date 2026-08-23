@@ -1,0 +1,10 @@
+export const PROVIDER_ID = "zcode-start-plan";
+export const ZCODE_BASE_URL = "https://zcode.z.ai/api/v1/zcode-plan/anthropic";
+export const ZCODE_MESSAGES_URL = `${ZCODE_BASE_URL}/v1/messages`;
+export const ZCODE_CLIENT_VERSION = "3.8.1";
+export const ZCODE_CONFIG_URL = "https://zcode.z.ai/api/v1/client/configs";
+export const ZCODE_BILLING_CURRENT_URL = "https://zcode.z.ai/api/v1/zcode-plan/billing/current";
+export const ZCODE_BILLING_BALANCE_URL = "https://zcode.z.ai/api/v1/zcode-plan/billing/balance";
+export const ZCODE_OAUTH_AUTHORIZE_URL = "https://chat.z.ai/api/oauth/authorize";
+export const ZCODE_OAUTH_TOKEN_URL = "https://zcode.z.ai/api/v1/oauth/token";
+export const ZCODE_OAUTH_CLIENT_ID = "client_P8X5CMWmlaRO9gyO-KSqtg";

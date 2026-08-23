@@ -371,12 +371,16 @@ git commit -m "feat(zcode): add native Start Plan transport"
 
 **Files:**
 - Create: `agent/extensions/omp-zcode-start-plan/src/usage.ts`
+- Create: `agent/extensions/omp-zcode-start-plan/src/reserve.ts`
+- Create: `agent/extensions/omp-zcode-start-plan/src/identity.ts`
 - Test: `agent/extensions/omp-zcode-start-plan/tests/usage.test.ts`
+- Test: `agent/extensions/omp-zcode-start-plan/tests/reserve.test.ts`
 
 **Interfaces:**
 - Produces: `zcodeUsageProvider: UsageProvider`.
 - Produces: `parseBalanceReport(payload, identity, fetchedAt): UsageReport | null`.
 - Consumes JWT from `UsageFetchParams.credential` and returns separate entitlement limits.
+- Produces: `checkZcodeUsageReserve(fetch, accessToken, modelId)`; throws OMP's recognized `UsageLimit` when every relevant entitlement is at least 98% used.
 
 - [ ] **Step 1: Write failing multi-bucket usage tests**
 
@@ -413,17 +417,17 @@ Expected: FAIL because `usage.ts` does not exist.
 - include `email`, `accountId`, endpoint, active plan name, and expiry in metadata
 - set `status` to `warning` at ≥90% and `exhausted` at 100%
 
-Every limit scope includes provider, accountId, and `shared: true` so OMP displays each account correctly. The plugin relies on core sticky/round-robin selection plus reactive rotation after recognized quota/auth failures; it does not claim proactive headroom ranking because OMP 18.0.1 exposes no extension ranking-strategy registration.
+Every limit scope includes provider, accountId, and `shared: true` so OMP displays each account correctly. The plugin relies on core sticky/round-robin selection. Before CAPTCHA/model dispatch, a fail-open reserve check evaluates the selected credential's requested-model entitlements; when every relevant bucket is ≥98% used, it emits HTTP 429 `UsageLimit` with `retry-after`, allowing OMP to cool down that credential and rotate a sibling. This is reactive eligibility checking, not proactive headroom ranking, because OMP 18.0.1 exposes no extension ranking-strategy registration.
 
 - [ ] **Step 4: Verify usage tests and types**
 
-Run: `bun test tests/usage.test.ts && bun x tsc --noEmit`  
+Run: `bun test tests/usage.test.ts tests/reserve.test.ts && bun x tsc --noEmit`  
 Expected: usage tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent/extensions/omp-zcode-start-plan/src/usage.ts agent/extensions/omp-zcode-start-plan/tests/usage.test.ts
+git add agent/extensions/omp-zcode-start-plan
 git commit -m "feat(zcode): add account-aware Start Plan usage"
 ```
 

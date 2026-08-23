@@ -100,6 +100,10 @@ Per credential it calls ZCode's versioned balance endpoint:
 
 It emits normalized limits for every entitlement bucket, including separate GLM-5.3 Weekend Build, GLM-5.3 trial, and GLM-5-Turbo balances. Reports include account identity, plan/expiry metadata, endpoint metadata, and status. Interactive `/usage`, cache, and history consume these reports. OMP 18.0.1's standalone `omp usage` command does not load extension providers, so CLI usage cannot include this plugin without an OMP core fix. OMP 18.0.1 also does not expose `CredentialRankingStrategy` through extension `ProviderConfig`, so this custom provider cannot proactively rank accounts by remaining quota.
 
+### `src/reserve.ts`
+
+Before CAPTCHA minting or model dispatch, the transport fetches the selected bearer's balance and filters limits to the requested model. If every applicable entitlement is at least 98% used, it throws OMP's standard HTTP 429 `UsageLimit` signal with a `retry-after` derived from the earliest entitlement reset. OMP then cools down only that credential and retries a sibling. The check fails open when balance data is unavailable, and any applicable entitlement below 98% keeps the account eligible.
+
 ### `src/diagnostics.ts`
 
 Maintains redacted process-local state:
@@ -120,12 +124,13 @@ OMP AuthStorage remains authoritative:
 - OAuth credentials are keyed by `email`/`accountId`.
 - Session credentials remain sticky for cache locality.
 - Account choice uses OMP's normal sticky/round-robin selection for custom providers.
-- Recognized auth/rate-limit/quota failures block the affected credential and rotate directly to a sibling; this is how exhausted accounts are skipped reactively.
+- The 98% reserve gate runs against the credential OMP selected; it does not delete or permanently disable accounts.
+- A reserve hit is surfaced as OMP's recognized `UsageLimit`, so core temporarily blocks that credential and rotates directly to a sibling.
 - `/logout` and credential health use normal OMP surfaces.
 
 The extension must not duplicate round-robin, block state, or credential persistence.
 
-Proactive pre-request headroom ranking is intentionally out of scope for the plugin-only implementation. Adding it cleanly requires a separate OMP core API change that lets extensions register a `CredentialRankingStrategy`; overriding the built-in `zai` provider would collide with unrelated Z.ai models and credentials.
+Proactive pre-request headroom ranking remains out of scope for the plugin-only implementation. The reserve gate is a reactive eligibility check on the selected bearer, not a replacement for ranking every candidate. Adding built-in-style ranking cleanly requires a separate OMP core API that lets extensions register a `CredentialRankingStrategy`; overriding the built-in `zai` provider would collide with unrelated Z.ai models and credentials.
 
 ## Models
 

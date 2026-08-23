@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { release } from "node:os";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import {
@@ -23,6 +22,8 @@ import {
   ZCODE_MESSAGES_URL,
 } from "./constants";
 import { diagnostics, type ZcodeDiagnostics } from "./diagnostics";
+import { zcodeIdentityHeaders } from "./identity";
+import { checkZcodeUsageReserve } from "./reserve";
 import { buildZcodeSystem } from "./system";
 import { isRecord } from "./type-guards";
 
@@ -104,23 +105,6 @@ export function normalizeZcodePayload(payload: unknown, requestModelId: string):
   return normalized;
 }
 
-export function zcodeIdentityHeaders(): Record<string, string> {
-  const locale = Intl.DateTimeFormat().resolvedOptions().locale || "en-US";
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  return {
-    "User-Agent": `ZCode/${ZCODE_CLIENT_VERSION}`,
-    "HTTP-Referer": "https://zcode.z.ai",
-    "X-Title": "Z Code@electron",
-    "X-ZCode-App-Version": ZCODE_CLIENT_VERSION,
-    "X-Release-Channel": "production",
-    "X-Client-Language": locale,
-    "X-Client-Timezone": timeZone,
-    "X-Platform": "linux-x64",
-    "X-Os-Category": "linux",
-    "X-Os-Version": release(),
-    "X-ZCode-Agent": "glm",
-  };
-}
 
 function requestIdentityHeaders(): Record<string, string> {
   return {
@@ -168,16 +152,25 @@ export function createZcodeFetch(
   baseFetch: FetchImpl,
   requestDiagnostics: ZcodeDiagnostics = diagnostics,
   solve: (config: CaptchaSolveConfig, appVersion: string) => Promise<string> = solveCaptcha,
+  reserveCheck: typeof checkZcodeUsageReserve = checkZcodeUsageReserve,
+  modelId?: string,
 ): FetchImpl {
   return async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url !== ZCODE_MESSAGES_URL && !url.endsWith("/v1/messages")) return baseFetch(input, init);
 
     const startedAt = performance.now();
-    const config = await loadCaptchaConfig(baseFetch);
-    const verifyParam = await solve(config, ZCODE_CLIENT_VERSION);
     const headers = new Headers(input instanceof Request ? input.headers : undefined);
     new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+    const authorization = headers.get("authorization");
+    const accessToken = authorization?.match(/^Bearer\s+(.+)$/iu)?.[1];
+    if (modelId && accessToken) {
+      await reserveCheck(baseFetch, accessToken, modelId, {
+        signal: init?.signal ?? (input instanceof Request ? input.signal : undefined),
+      });
+    }
+    const config = await loadCaptchaConfig(baseFetch);
+    const verifyParam = await solve(config, ZCODE_CLIENT_VERSION);
     headers.delete("x-api-key");
     headers.delete("anthropic-beta");
     headers.delete("x-device-mid");
@@ -272,7 +265,13 @@ export function streamZcodeStartPlan(
       ...options.headers,
       Authorization: `Bearer ${apiKey}`,
     },
-    fetch: createZcodeFetch(options.fetch ?? fetch),
+    fetch: createZcodeFetch(
+      options.fetch ?? fetch,
+      diagnostics,
+      solveCaptcha,
+      checkZcodeUsageReserve,
+      thinking.requestModelId,
+    ),
     onPayload: async (payload) => {
       const normalized = normalizeZcodePayload(payload, thinking.requestModelId);
       return (await userPayloadHook?.(normalized, model)) ?? normalized;

@@ -2,7 +2,7 @@ import { type as schema } from "@oh-my-pi/omptype";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai";
 import { PROVIDER_ID, ZCODE_BILLING_BALANCE_URL, ZCODE_CLIENT_VERSION } from "./constants";
 import { diagnostics } from "./diagnostics";
-import { zcodeIdentityHeaders } from "./transport";
+import { zcodeIdentityHeaders } from "./identity";
 
 const BalanceSchema = schema({
   entitlement_id: "string",

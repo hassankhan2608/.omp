@@ -1,4 +1,5 @@
 import { Effort, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
+import { isUsageLimit } from "@oh-my-pi/pi-ai/error";
 import { expect, test } from "bun:test";
 import { ZcodeDiagnostics } from "../src/diagnostics";
 import {
@@ -8,6 +9,7 @@ import {
   resolveZcodeThinking,
 } from "../src/transport";
 import { ZCODE_MODELS } from "../src/models";
+import { checkZcodeUsageReserve } from "../src/reserve";
 
 const captchaConfig = {
   code: 0,
@@ -75,6 +77,54 @@ test("normalizes the Anthropic payload to ZCode desktop parity", () => {
     output_config: { effort: "max" },
     stream: true,
   });
+});
+
+test("checks the selected account reserve before minting CAPTCHA or sending the model request", async () => {
+  let solveCalls = 0;
+  let messageCalls = 0;
+  const baseFetch: FetchImpl = async (input) => {
+    if (String(input).includes("/billing/balance")) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          balances: [{
+            entitlement_id: "trial",
+            show_name: "GLM-5.3",
+            total_units: 100_000,
+            used_units: 98_000,
+            remaining_units: 2_000,
+            expires_at: 2_000,
+          }],
+        },
+      }), { status: 200 });
+    }
+    messageCalls += 1;
+    return new Response("unexpected", { status: 200 });
+  };
+  const wrapped = createZcodeFetch(
+    baseFetch,
+    new ZcodeDiagnostics(),
+    async () => {
+      solveCalls += 1;
+      return "captcha";
+    },
+    checkZcodeUsageReserve,
+    "glm-5.3",
+  );
+
+  let caught: unknown;
+  try {
+    await wrapped("https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages", {
+      method: "POST",
+      headers: { authorization: "Bearer plan-jwt" },
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(isUsageLimit(caught)).toBe(true);
+  expect(solveCalls).toBe(0);
+  expect(messageCalls).toBe(0);
 });
 
 test("adds fresh verification and exact ZCode identity headers per model request", async () => {

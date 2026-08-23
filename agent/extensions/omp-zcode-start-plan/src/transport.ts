@@ -71,7 +71,7 @@ export function normalizeZcodePayload(payload: unknown, requestModelId: string):
   return normalized;
 }
 
-function staticZcodeHeaders(): Record<string, string> {
+export function zcodeIdentityHeaders(): Record<string, string> {
   const locale = Intl.DateTimeFormat().resolvedOptions().locale || "en-US";
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   return {
@@ -118,7 +118,7 @@ async function loadCaptchaConfig(baseFetch: FetchImpl): Promise<CaptchaSolveConf
   const url = new URL(ZCODE_CONFIG_URL);
   url.searchParams.set("app_version", ZCODE_CLIENT_VERSION);
   url.searchParams.set("platform", "linux-x64");
-  const value = baseFetch(url, { headers: staticZcodeHeaders() }).then(async (response) => {
+  const value = baseFetch(url, { headers: zcodeIdentityHeaders() }).then(async (response) => {
     if (!response.ok) throw new Error(`ZCode client config failed (${response.status})`);
     return parseCaptchaConfig(await response.json());
   });
@@ -148,7 +148,7 @@ export function createZcodeFetch(
     headers.delete("x-api-key");
     headers.delete("anthropic-beta");
     headers.delete("x-device-mid");
-    for (const [key, value] of Object.entries(staticZcodeHeaders())) headers.set(key, value);
+    for (const [key, value] of Object.entries(zcodeIdentityHeaders())) headers.set(key, value);
     for (const [key, value] of Object.entries(requestIdentityHeaders())) headers.set(key, value);
     headers.set("X-Aliyun-Captcha-Verify-Param", verifyParam);
     headers.set("X-Aliyun-Captcha-Verify-Region", config.region);

@@ -45,12 +45,13 @@ import { ZCODE_MODELS } from "../src/models";
 
 test("publishes the Start Plan model limits", () => {
   expect(ZCODE_MODELS.map(model => [model.id, model.contextWindow, model.maxTokens])).toEqual([
-    ["glm-5.3", 1_000_000, 131_072],
-    ["glm-5-turbo", 200_000, 131_072],
+    ["glm-5.3", 1_000_000, 128_000],
+    ["glm-5-turbo", 200_000, 128_000],
   ]);
   expect(ZCODE_MODELS[0]?.thinking).toEqual({
-    mode: "openai",
-    efforts: ["low", "high", "max"],
+    mode: "anthropic-budget-effort",
+    efforts: [Effort.Low, Effort.High, Effort.Max],
+    defaultLevel: Effort.Max,
   });
 });
 ```
@@ -95,7 +96,6 @@ export const ZCODE_BASE_URL = "https://zcode.z.ai/api/v1/zcode-plan/anthropic";
 export const ZCODE_MESSAGES_URL = `${ZCODE_BASE_URL}/v1/messages`;
 export const ZCODE_CLIENT_VERSION = "3.8.1";
 export const ZCODE_CONFIG_URL = "https://zcode.z.ai/api/v1/client/configs";
-export const ZCODE_BILLING_CURRENT_URL = "https://zcode.z.ai/api/v1/zcode-plan/billing/current";
 export const ZCODE_BILLING_BALANCE_URL = "https://zcode.z.ai/api/v1/zcode-plan/billing/balance";
 ```
 
@@ -408,9 +408,9 @@ Expected: FAIL because `usage.ts` does not exist.
 
 - accept only OAuth credentials for provider `zcode-start-plan`
 - send `Authorization: Bearer <credential.accessToken>`
-- fetch `billing/current` and `billing/balance`
+- fetch `billing/balance?app_version=3.8.1`, matching ZCode 3.8.1
 - return `null` on endpoint failure without blocking model calls
-- include `email`, `accountId`, endpoint, plan name, and expiry in metadata
+- include `email`, `accountId`, endpoint, active plan name, and expiry in metadata
 - set `status` to `warning` at ≥90% and `exhausted` at 100%
 
 Every limit scope includes provider, accountId, and `shared: true` so OMP displays each account correctly. The plugin relies on core sticky/round-robin selection plus reactive rotation after recognized quota/auth failures; it does not claim proactive headroom ranking because OMP 18.0.1 exposes no extension ranking-strategy registration.
@@ -434,7 +434,7 @@ git commit -m "feat(zcode): add account-aware Start Plan usage"
 **Files:**
 - Create: `agent/extensions/omp-zcode-start-plan/src/extension.ts`
 - Test: `agent/extensions/omp-zcode-start-plan/tests/extension.test.ts`
-- Modify: `agent/config.yml`
+- Link: `omp plugin link ~/.omp/agent/extensions/omp-zcode-start-plan --scope user`
 
 **Interfaces:**
 - Registers provider `zcode-start-plan` with models, OAuth, `streamSimple`, and usage.
@@ -481,13 +481,15 @@ pi.registerProvider(PROVIDER_ID, {
 
 `/zcode-status` renders `diagnostics.snapshot()` plus instructions for `/login`, `/usage`, and model selection. `/zcode-probe` uses the registered model/transport path for one minimal request and labels that it consumes quota. `session_shutdown` calls `closeCaptchaBroker()`.
 
-- [ ] **Step 4: Register the extension path**
+- [ ] **Step 4: Link the plugin**
 
-Append only this exact path to `extensions` in `~/.omp/agent/config.yml` without changing existing entries:
+Run:
 
-```yaml
-  - ~/.omp/agent/extensions/omp-zcode-start-plan/src/extension.ts
+```bash
+omp plugin link ~/.omp/agent/extensions/omp-zcode-start-plan --scope user
 ```
+
+Do not also add the extension entry file to `agent/config.yml`; duplicate registration loads the same commands and provider twice.
 
 - [ ] **Step 5: Verify registration tests and OMP discovery**
 
@@ -504,7 +506,7 @@ Expected: tests and typecheck pass; both models appear after authentication requ
 - [ ] **Step 6: Commit**
 
 ```bash
-git add agent/extensions/omp-zcode-start-plan agent/config.yml
+git add agent/extensions/omp-zcode-start-plan
 git commit -m "feat(zcode): register native Start Plan extension"
 ```
 
@@ -540,13 +542,9 @@ Complete browser OAuth. Confirm the provider becomes authenticated and `zcode-st
 
 - [ ] **Step 4: Verify native usage**
 
-Run:
+Inside OMP run `/usage`.
 
-```bash
-omp usage
-```
-
-Expected: a `zcode-start-plan` section with the current account identity and separate Weekend Build, GLM-5.3 trial, and GLM-5-Turbo entitlement buckets.
+Expected: a `zcode-start-plan` section with the current account identity and separate Weekend Build, GLM-5.3 trial, and GLM-5-Turbo entitlement buckets. OMP 18.0.1's standalone `omp usage` command does not load extension providers; supporting that CLI requires a separate OMP core fix.
 
 - [ ] **Step 5: Verify consecutive native requests**
 
@@ -570,7 +568,7 @@ Expected: endpoint, account identity, broker state, verification latency, HTTP s
 
 - [ ] **Step 7: Verify multi-account identity behavior**
 
-Run `/login zcode-start-plan` with a second account if available, then `omp usage`. Expected: both accounts appear as separate credential reports. If no second account is available, unit identity/upsert coverage remains the proof and this live check is recorded as unavailable, not simulated.
+Run `/login zcode-start-plan` with a second account if available, then interactive `/usage`. Expected: both accounts appear as separate credential reports. If no second account is available, unit identity/upsert coverage remains the proof and this live check is recorded as unavailable, not simulated.
 
 - [ ] **Step 8: Confirm relay isolation**
 
@@ -581,6 +579,6 @@ Verify `/home/laughingman/repos/zcode-relay` has no changes from this task and t
 Commit only tested fixes and generated lockfile changes with:
 
 ```bash
-git add agent/extensions/omp-zcode-start-plan agent/config.yml
+git add agent/extensions/omp-zcode-start-plan
 git commit -m "fix(zcode): complete native provider verification"
 ```

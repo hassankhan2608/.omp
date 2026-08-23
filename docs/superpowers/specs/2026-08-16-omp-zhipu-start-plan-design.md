@@ -59,7 +59,7 @@ Runs ZCode’s browser authorization-code flow:
 2. Open `chat.z.ai/api/oauth/authorize` with ZCode’s registered client ID.
 3. Validate callback state.
 4. Exchange the code at `zcode.z.ai/api/v1/oauth/token`.
-5. Persist the returned Start Plan JWT as OAuth `access`, the provider access token as `refresh`, and returned `email`/`accountId` identity fields.
+5. Persist the returned Start Plan JWT as OAuth `access`, the provider access token as `refresh`, and `data.user.user_id`/email as the stable account identity.
 
 Repeated `/login zcode-start-plan` adds or updates accounts through OMP’s standard identity-key upsert. No plugin-owned account database.
 
@@ -82,11 +82,11 @@ Parameters are never cached or reused. The BrowserWindow remains hidden for succ
 Implements OMP `streamSimple`:
 
 - uses the credential selected by OMP in `SimpleStreamOptions`
-- obtains a fresh verification parameter
-- converts OMP context into Anthropic Messages format
-- sends ZCode identity, trace, auth, and CAPTCHA headers
-- parses batch/SSE responses into `AssistantMessageEventStream`
-- preserves reasoning, tool calls/results, usage, cancellation, and stop reasons
+- delegates OMP context, tools, SSE parsing, usage, cancellation, and stop reasons to `streamAnthropic`
+- materializes Anthropic compatibility for the custom API before streaming
+- maps GLM reasoning levels to ZCode's exact budgets and wire model casing
+- prepends the required ZCode gateway system blocks and final-message cache marker
+- obtains a fresh verification parameter and sends the exact ZCode identity, trace, auth, and CAPTCHA headers
 
 Provider errors retain HTTP status and ZCode business code so OMP’s core auth retry can distinguish quota, rate-limit, and invalid-credential outcomes.
 
@@ -94,12 +94,11 @@ Provider errors retain HTTP status and ZCode business code so OMP’s core auth 
 
 Implements the standard `UsageProvider` supplied in `registerProvider`.
 
-Per credential it calls:
+Per credential it calls ZCode's versioned balance endpoint:
 
-- `GET https://zcode.z.ai/api/v1/zcode-plan/billing/current`
-- `GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance`
+- `GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.8.1`
 
-It emits normalized limits for every entitlement bucket, including separate GLM-5.3 Weekend Build, GLM-5.3 trial, and GLM-5-Turbo balances. Reports include account identity, reset/expiry timestamps, endpoint metadata, and status. Native `/usage`, `omp usage`, cache, and history consume these reports. OMP 18.0.1 does not expose `CredentialRankingStrategy` through extension `ProviderConfig`, so this custom provider cannot proactively rank accounts by remaining quota.
+It emits normalized limits for every entitlement bucket, including separate GLM-5.3 Weekend Build, GLM-5.3 trial, and GLM-5-Turbo balances. Reports include account identity, plan/expiry metadata, endpoint metadata, and status. Interactive `/usage`, cache, and history consume these reports. OMP 18.0.1's standalone `omp usage` command does not load extension providers, so CLI usage cannot include this plugin without an OMP core fix. OMP 18.0.1 also does not expose `CredentialRankingStrategy` through extension `ProviderConfig`, so this custom provider cannot proactively rank accounts by remaining quota.
 
 ### `src/diagnostics.ts`
 
@@ -132,8 +131,8 @@ Proactive pre-request headroom ranking is intentionally out of scope for the plu
 
 | Model | Context | Max output | Reasoning |
 |---|---:|---:|---|
-| `zcode-start-plan/glm-5.3` | 1,000,000 | 131,072 | low/high/max; always enabled |
-| `zcode-start-plan/glm-5-turbo` | 200,000 | 131,072 | enabled |
+| `zcode-start-plan/glm-5.3` | 1,000,000 | 128,000 | low/high/max; default max |
+| `zcode-start-plan/glm-5-turbo` | 200,000 | 128,000 | enabled/off; exposed as low/off in OMP |
 
 Both are text-only for this integration. Costs are zero in model metadata because consumption is entitlement-based; actual balance is represented by the usage provider.
 
@@ -158,7 +157,7 @@ The package lives entirely under:
 ~/.omp/agent/extensions/omp-zcode-start-plan/
 ```
 
-It follows existing local extension layout with `package.json`, `src/`, `tests/`, `tsconfig.json`, and Bun lockfile. It is registered through OMP’s extension loading configuration. The existing relay provider `zcode-weekend` stays available during verification as a fallback.
+It follows the existing local extension layout with `package.json`, `src/`, `tests/`, `tsconfig.json`, and Bun lockfile. Install it with `omp plugin link ~/.omp/agent/extensions/omp-zcode-start-plan --scope user`; do not also list its entry file in `agent/config.yml`, which would load the same extension twice. The existing relay provider `zcode-weekend` stays available during verification as a fallback.
 
 ## Verification
 

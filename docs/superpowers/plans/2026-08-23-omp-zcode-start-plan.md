@@ -413,7 +413,7 @@ Expected: FAIL because `usage.ts` does not exist.
 - include `email`, `accountId`, endpoint, plan name, and expiry in metadata
 - set `status` to `warning` at ≥90% and `exhausted` at 100%
 
-Every limit scope includes provider, accountId, and `shared: true` so OMP can display and rank accounts correctly.
+Every limit scope includes provider, accountId, and `shared: true` so OMP displays each account correctly. The plugin relies on core sticky/round-robin selection plus reactive rotation after recognized quota/auth failures; it does not claim proactive headroom ranking because OMP 18.0.1 exposes no extension ranking-strategy registration.
 
 - [ ] **Step 4: Verify usage tests and types**
 

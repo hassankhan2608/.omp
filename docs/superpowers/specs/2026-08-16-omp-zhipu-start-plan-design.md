@@ -99,7 +99,7 @@ Per credential it calls:
 - `GET https://zcode.z.ai/api/v1/zcode-plan/billing/current`
 - `GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance`
 
-It emits normalized limits for every entitlement bucket, including separate GLM-5.3 Weekend Build, GLM-5.3 trial, and GLM-5-Turbo balances. Reports include account identity, reset/expiry timestamps, endpoint metadata, and status. Native `/usage`, `omp usage`, history, and usage-aware credential selection consume these reports.
+It emits normalized limits for every entitlement bucket, including separate GLM-5.3 Weekend Build, GLM-5.3 trial, and GLM-5-Turbo balances. Reports include account identity, reset/expiry timestamps, endpoint metadata, and status. Native `/usage`, `omp usage`, cache, and history consume these reports. OMP 18.0.1 does not expose `CredentialRankingStrategy` through extension `ProviderConfig`, so this custom provider cannot proactively rank accounts by remaining quota.
 
 ### `src/diagnostics.ts`
 
@@ -120,11 +120,13 @@ OMP AuthStorage remains authoritative:
 
 - OAuth credentials are keyed by `email`/`accountId`.
 - Session credentials remain sticky for cache locality.
-- Usage reports let OMP avoid exhausted accounts.
-- Recognized auth/rate-limit/quota failures block the affected credential and rotate to a sibling.
+- Account choice uses OMP's normal sticky/round-robin selection for custom providers.
+- Recognized auth/rate-limit/quota failures block the affected credential and rotate directly to a sibling; this is how exhausted accounts are skipped reactively.
 - `/logout` and credential health use normal OMP surfaces.
 
 The extension must not duplicate round-robin, block state, or credential persistence.
+
+Proactive pre-request headroom ranking is intentionally out of scope for the plugin-only implementation. Adding it cleanly requires a separate OMP core API change that lets extensions register a `CredentialRankingStrategy`; overriding the built-in `zai` provider would collide with unrelated Z.ai models and credentials.
 
 ## Models
 

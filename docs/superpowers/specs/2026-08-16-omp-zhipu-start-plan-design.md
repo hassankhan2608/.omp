@@ -1,106 +1,174 @@
-# Design — OMP Zhipu Start-Plan Plugin (`omp-zhipu-start-plan`)
+# Design — Native OMP ZCode Start Plan Provider
 
-**Date:** 2026-08-16
-**Status:** Design (pending review)
-**Scope:** OMP agent extension that lets the OMP agent consume GLM models through the ZCode Start Plan relay (`zcode.z.ai`) — the only Zhipu/Z.ai plan currently available to the local account (`zai-start-plan: available`; `api.z.ai` key auth and coding-plan OAuth both denied: 429 code 1113 / `coding_plan_not_entitled`).
+**Revised:** 2026-08-23  
+**Status:** Approved for implementation  
+**Target:** `~/.omp/agent/extensions/omp-zcode-start-plan/`
 
-## 1. Goals & Non-Goals
+## Goal
 
-### Goals
-1. Register a `zai-start-plan` provider in OMP that streams GLM-5.3 / GLM-5.2 / GLM-5-Turbo through the Start Plan relay.
-2. Obtain the per-request relay requirements (fresh Aliyun captcha param, relay JWT, device fingerprint) **without reproducing captcha generation** — the anti-bot gate (research finding F4) stays intact and runs inside the user's own ZCode app.
-3. One-time `/login` imports the existing ZCode session; token rotation is automatic thereafter.
-4. Verifiable: a real OMP agent turn must produce a 200/SSE round-trip through the relay (research test matrix row 7 behavior, but via OMP).
+Provide ZCode Start Plan models directly inside Oh My Pi without a localhost HTTP relay. The extension must support GLM-5.3 and GLM-5-Turbo, repeated OAuth login for multiple accounts, native OMP usage reporting, automatic per-request Aliyun verification, and redacted endpoint diagnostics.
 
-### Non-Goals
-- No Aliyun captcha generation or interactive-solving automation (research §10 red line; ToS risk). See §7.
-- No modification of ZCode's app files, state, or processes beyond the read-only CDP inspector channel already validated by prior research (SIGUSR1 → `ws://127.0.0.1:9229`, main-process `fetch` wrapper, restored on shutdown).
-- No support for plans the account does not hold (coding plan, BigModel key today).
+The existing checkout at `/home/laughingman/repos/zcode-relay` is an independent fallback and must not be modified, imported, stopped, or removed by this work.
 
-## 2. Context Summary (from `RESEARCH-zcode-omp-glm-auth-architecture.md`)
+## Proven upstream contract
 
-- Relay: `POST https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages`, Anthropic-messages wire shape.
-- Hard requirement: `Authorization: Bearer <zcodejwttoken>` + `x-api-key` + fingerprint headers + `X-Device-Mid` + **fresh** `X-Aliyun-Captcha-Verify-Param` / `X-Aliyun-Captcha-Verify-Region` per request; without a fresh captcha param every request is rejected 400 code 3007 (test rows 4–6; cookies/HTTP2 irrelevant).
-- The captcha param is minted only inside ZCode's renderer (Aliyun SDK; region/prefix server-supplied via `getClientConfigs().configs.captcha`) and merged by the host main process into relay headers. Verified: host `out/host/index.js` has zero `captchaVerifyParam` occurrences; the agent runtime always delegates header minting to the host (`providerRuntimeHeadersPort.refreshBeforeModelRequest` → `interactionRequestProviderRuntimeHeaders` over the internal "ZCode Protocol" `messageSink`, error `-32020` when no host client attached — no external client can mint headers).
-- Credentials: `~/.zcode/v2/credentials.json` stores `zcodejwttoken` (HS256 JWT, no `exp` — F2) + `oauth:zai:access_token` under `enc:v1:` AES-256-GCM with a machine-derivable key (`sha256(secret)`, `secret = ZCODE_CREDENTIAL_SECRET || "zcode-credential-fallback:{platform}:{homedir}:{username}"`) — F1: at-rest protection equals file permissions. All values locally available to the same user.
-- Device/OS fingerprint sources: `~/.zcode/v2/telemetry-state.json` (`X-Device-Mid`), `~/.zcode/v2/setting.json` (locale), kernel (`X-Os-Version`).
-- Local state today: `zai-start-plan: available` in `coding-plan-cache.json`; `modelProviderFamilySelectedKeys.zai = "coding-plan:builtin:zai-start-plan"` in `setting.json`; ZCode app installed at `/opt/ZCode/zcode`.
+Installed ZCode 3.8.1 uses:
 
-## 3. Architecture
+- Provider: `builtin:zai-start-plan`
+- Endpoint: `POST https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages`
+- Wire format: Anthropic Messages with SSE streaming
+- Authentication: `Authorization: Bearer <zcode plan JWT>`
+- Verification: fresh `X-Aliyun-Captcha-Verify-Param` and `X-Aliyun-Captcha-Verify-Region` on every model request
+- Identity headers matching ZCode 3.8.1
 
-```
-OMP agent loop
-   │  model = zai-start-plan/glm-5.2
-   ▼
-pi.registerProvider("zai-start-plan", { api:"anthropic-messages", streamSimple, oauth.login/refreshToken/getApiKey, models })
-   │
-   ▼ streamSimple(model, context, options)
-build Anthropic-messages body from context; resolve jwt + fingerprint + captcha pair
-   │
-   ▼
-POST https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages
-headers: fingerprint set + Authorization + x-api-key + X-Device-Mid + fresh captcha pair
-   │
-   ▼ SSE
-stream wrapper → AssistantMessageEventStream → agent loop
+The installed app consumed Weekend Build quota successfully. An Electron 41.0.3 probe using the official Aliyun SDK and ZCode inputs produced a valid 280-character verification parameter automatically. The former jsdom approach is rejected because it produces Aliyun `F001`, caches one-use parameters, and does not match ZCode’s Electron renderer.
+
+## Architecture
+
+```text
+OMP provider zcode-start-plan
+  │
+  ├─ OAuth login → OMP AuthStorage account rows
+  ├─ UsageProvider → ZCode billing endpoints
+  ├─ Electron verification broker → fresh parameter per request
+  └─ streamSimple transport
+       │
+       └─ ZCode Anthropic endpoint → OMP AssistantMessageEventStream
 ```
 
-Config switch `mode`:
-- `bridge` (default, implements Goal 2): live capture of headers from the running ZCode app.
-- `static`: passthrough when a real Zhipu/Z.ai API key or coding-plan entitlement exists (`ZHIPU_BIGMODEL_API_KEY` env / auth-store key) — routes to `open.bigmodel.cn/api/anthropic` or `api.z.ai/api/anthropic` as a plain key provider. Selected automatically when such a key is present; otherwise disabled. (Future-proofing; not usable today.)
+The extension registers one provider through `pi.registerProvider("zcode-start-plan", config)`. It uses a custom API identifier and `streamSimple`, so OMP owns model selection, session state, retries, credential choice, usage history, and account rotation while the extension owns only the ZCode-specific wire contract.
 
-## 4. Components
+## Components
 
-Location: `~/.omp/agent/extensions/omp-zhipu-start-plan/` (TypeScript, `@oh-my-pi/pi-coding-agent` type surface, zod for config — same pattern as existing extensions). Registered in `~/.omp/agent/config.yml` `extensions:`.
+### `src/extension.ts`
 
-| File | Responsibility |
+Extension entry point. Registers:
+
+- provider `zcode-start-plan`
+- models `glm-5.3` and `glm-5-turbo`
+- OAuth login and credential mapping
+- normalized usage provider
+- `/zcode-status` and `/zcode-probe`
+- session shutdown cleanup for the Electron broker
+
+### `src/oauth.ts`
+
+Runs ZCode’s browser authorization-code flow:
+
+1. Start a loopback callback on an OS-assigned port.
+2. Open `chat.z.ai/api/oauth/authorize` with ZCode’s registered client ID.
+3. Validate callback state.
+4. Exchange the code at `zcode.z.ai/api/v1/oauth/token`.
+5. Persist the returned Start Plan JWT as OAuth `access`, the provider access token as `refresh`, and returned `email`/`accountId` identity fields.
+
+Repeated `/login zcode-start-plan` adds or updates accounts through OMP’s standard identity-key upsert. No plugin-owned account database.
+
+### `src/captcha/client.ts` and Electron broker assets
+
+A persistent Electron 41.0.3 subprocess communicates with the extension over newline-delimited JSON on stdio.
+
+For every model request it:
+
+1. Loads a clean local renderer page.
+2. Sets the ZCode 3.8.1 user agent.
+3. Loads the official Aliyun CAPTCHA SDK.
+4. Calls `startTracelessVerification()` with live `sceneId`, `region`, and `prefix` from ZCode client configuration.
+5. Returns one verification parameter to exactly one waiting request.
+
+Parameters are never cached or reused. The BrowserWindow remains hidden for successful traceless verification. It becomes visible only when Aliyun’s SDK requires interactive verification. Broker crashes reject pending calls, and the next request starts a fresh broker. Session shutdown closes it.
+
+### `src/transport.ts`
+
+Implements OMP `streamSimple`:
+
+- uses the credential selected by OMP in `SimpleStreamOptions`
+- obtains a fresh verification parameter
+- converts OMP context into Anthropic Messages format
+- sends ZCode identity, trace, auth, and CAPTCHA headers
+- parses batch/SSE responses into `AssistantMessageEventStream`
+- preserves reasoning, tool calls/results, usage, cancellation, and stop reasons
+
+Provider errors retain HTTP status and ZCode business code so OMP’s core auth retry can distinguish quota, rate-limit, and invalid-credential outcomes.
+
+### `src/usage.ts`
+
+Implements the standard `UsageProvider` supplied in `registerProvider`.
+
+Per credential it calls:
+
+- `GET https://zcode.z.ai/api/v1/zcode-plan/billing/current`
+- `GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance`
+
+It emits normalized limits for every entitlement bucket, including separate GLM-5.3 Weekend Build, GLM-5.3 trial, and GLM-5-Turbo balances. Reports include account identity, reset/expiry timestamps, endpoint metadata, and status. Native `/usage`, `omp usage`, history, and usage-aware credential selection consume these reports.
+
+### `src/diagnostics.ts`
+
+Maintains redacted process-local state:
+
+- endpoint and model
+- broker running/stopped
+- last verification duration and outcome
+- last HTTP status and request ID
+- last usage fetch status and timestamp
+- selected account email/account ID when available
+
+`/zcode-status` displays state without network use. `/zcode-probe` explicitly performs one minimal GLM-5.3 request and therefore consumes quota. `ZCODE_START_PLAN_DEBUG=1` logs URL, header names, timing, status, business code, and request ID through `pi.logger`; it never logs JWTs, OAuth tokens, CAPTCHA values, or complete authorization headers.
+
+## Multi-account behavior
+
+OMP AuthStorage remains authoritative:
+
+- OAuth credentials are keyed by `email`/`accountId`.
+- Session credentials remain sticky for cache locality.
+- Usage reports let OMP avoid exhausted accounts.
+- Recognized auth/rate-limit/quota failures block the affected credential and rotate to a sibling.
+- `/logout` and credential health use normal OMP surfaces.
+
+The extension must not duplicate round-robin, block state, or credential persistence.
+
+## Models
+
+| Model | Context | Max output | Reasoning |
+|---|---:|---:|---|
+| `zcode-start-plan/glm-5.3` | 1,000,000 | 131,072 | low/high/max; always enabled |
+| `zcode-start-plan/glm-5-turbo` | 200,000 | 131,072 | enabled |
+
+Both are text-only for this integration. Costs are zero in model metadata because consumption is entitlement-based; actual balance is represented by the usage provider.
+
+## Error policy
+
+| Condition | Behavior |
 |---|---|
-| `src/extension.ts` | Entry; loads config; calls `pi.registerProvider("zai-start-plan", …)`; installs `session_start`/`session_shutdown` lifecycle for capture cleanup; `/login` wiring via `oauth`. |
-| `src/config.ts` | Zod schema: `mode: "bridge"\|"static"` (default `bridge`), `autoLaunch` (default true), `captureTtlMs` (default 240000), `maxWaitForCaptureMs` (default 8000), `probeOnMiss` (default false), `relayBaseUrl`, `modelPins`. |
-| `src/credentials.ts` | Read-only access to `~/.zcode/v2/credentials.json`: parse `enc:v1:<iv>.<tag>.<ct>` (base64url), derive key per F1, AES-256-GCM decrypt, extract `zcodejwttoken`. Reads `telemetry-state.json` for `X-Device-Mid`, `setting.json` for locale. Static fingerprint assembly: `User-Agent: ZCode/3.7.7`, `HTTP-Referer: https://zcode.z.ai`, `X-Title: Z Code@electron`, `X-ZCode-App-Version: 3.7.7`, `X-Platform: linux-x64`, `X-Os-Category: linux`, `X-Os-Version: <uname -r>`, `X-Client-Language`, `X-Client-Timezone`. Result cached with `captureTtlMs`; re-read on 401. |
-| `src/capture.ts` | CDP bridge (Approach 1 core): (1) find ZCode main process (`pgrep -f /opt/ZCode/zcode`); if absent and `autoLaunch`, spawn `/opt/ZCode/zcode` detached; (2) `SIGUSR1` → main pid → debugger at `ws://127.0.0.1:9229`; (3) main-process `Runtime.evaluate` installs a `fetch` wrapper that records `(url, headers)` of requests to `zcode.z.ai` into a process-global ring buffer (idempotent: a marker variable prevents double-install); (4) poll buffer for a relay request carrying `X-Aliyun-Captcha-Verify-Param`; (5) cache captcha pair + current `Authorization` with `captureTtlMs`; (6) cleanup: restore original `fetch` and `SIGUSR1`/socket state on `session_shutdown`. Handles 9229-in-use race with backoff and a clear error. |
-| `src/proxy.ts` | Implements `streamSimple`: resolves jwt (credentials cache) + fingerprint + captcha pair (capture cache; wait up to `maxWaitForCaptureMs`, return retryable error on miss), builds the relay request (Anthropic-messages body with `model`, `max_tokens`, `messages`), streams SSE, maps relay business codes (see §6), emits `AssistantMessageEventStream` events. |
-| `src/models.ts` | GLM model catalog pinned to relay IDs (from ZCode catalog): GLM-5.3 (context 1M, out 128k, reasoning high/low/max), GLM-5.2 (context 1M, out 128k), GLM-5-Turbo (context 200k, out 128k). No cost fields (plan-billed). |
+| CAPTCHA automatic failure | Allow SDK interactive fallback; otherwise return `captcha_verification_failed` without crashing OMP |
+| CAPTCHA broker exit | Reject pending request; restart broker on the next request |
+| HTTP 401 | Surface invalid credential so OMP rotates or requests login |
+| HTTP 429 / code 1113 | Surface quota/rate-limit semantics; no 30-minute blind retry |
+| ZCode business quota exhausted | Mark the selected credential unavailable through OMP’s normal retry path |
+| Upstream 5xx | Bounded retry through OMP; preserve request ID |
+| Usage endpoint failure | Return no report for that account; do not block model calls |
+| Client abort | Abort fetch and broker wait promptly |
 
-## 5. Auth lifecycle
+## Installation and isolation
 
-- `oauth.login(callbacks)`: no interactive prompt. Detects a live ZCode session (credentials store present with `zcodejwttoken` + `zai-start-plan: available` in entitlement cache), imports it, returns `{ jwt, deviceMid, capturedAt }`; OMP persists via its standard auth store (`agent.db`), `storeCredentialsAs`-style semantics. Errors (store missing/unreadable) surface a clear message: "Start Plan session not found — log in to ZCode first."
-- `refreshToken(credentials)`: re-decrypt the store; return fresh creds when the stored JWT is younger than `captureTtlMs`, else error → re-login.
-- `getApiKey(credentials)`: current `zcodejwttoken`.
-- Static fingerprint parts are invariant; only JWT and captcha pair rotate with TTL.
+The package lives entirely under:
 
-## 6. Error handling & retry
+```text
+~/.omp/agent/extensions/omp-zcode-start-plan/
+```
 
-Relay business codes (research §7):
+It follows existing local extension layout with `package.json`, `src/`, `tests/`, `tsconfig.json`, and Bun lockfile. It is registered through OMP’s extension loading configuration. The existing relay provider `zcode-weekend` stays available during verification as a fallback.
 
-| Code | Handling |
-|---|---|
-| 3007 captcha failed | Force capture refresh (clear cache; wait for next captured param up to `maxWaitForCaptureMs`); single retry; then fail with "captcha stale — open/use ZCode to refresh" (or `probeOnMiss` triggers a hint). |
-| 3002 rate limited | Respect `Retry-After` header if present, else exponential backoff respecting OMP stream idle/first-event timeouts; surface `rate_limited`. |
-| 1113 (HTTP 429) / 1005 | Fail fast with quota-exhausted message (insufficient balance / daily free-plan exhausted); **no** retry. |
-| 3001/3006/3008–3010 | Surface provider error with relay message; no retry for 3001/3006, backoff for upstream-busy. |
-| 401 on JWT | Invalidate credential cache → `refreshToken` → single retry. |
-| Capture miss (ZCode idle) | Wait up to `maxWaitForCaptureMs`; on timeout return retryable error (OMP's own retry loop re-attempts after user activity in ZCode). |
+## Verification
 
-Retries are bounded (max 1 explicit retry per classified cause) to respect the free-plan quota.
-
-## 7. Security & policy decisions
-
-- **No captcha bypass.** The plugin never generates, solves, or forges Aliyun captcha params; it only reuses the header set minted by the user's own running ZCode app for the user's own session. The F4 gate remains fully in force against third parties.
-- **Read-only app interaction.** `capture.ts` uses only the SIGUSR1 inspector (opened by Electron, not by us) and a reversible `fetch` wrapper on the main process; original `fetch` restored on shutdown. No app-state mutation, no credential writes into ZCode stores.
-- **Credential handling.** `credentials.ts` decrypts the user's own store on the user's own machine using the documented F1 scheme (machine-derivable key — same trust boundary as file permissions). Requires no external secret.
-- **Disclosed residual risk:** using the app-bound Start Plan outside the ZCode UI may violate Z.Code's terms for the free tier; quota remains the account's own. The F1/F2/F4 findings remain appropriate for responsible disclosure per research §10 — this plugin does not publish or weaponize them beyond the account owner's own use.
-
-## 8. Verification plan
-
-1. **Unit — `credentials.ts`:** decrypt a fixture `enc:v1` blob → correct `zcodejwttoken`; TTL cache invalidation; missing-store error.
-2. **Unit — `capture.ts`:** hook install idempotency (marker variable prevents double-install); restore-on-cleanup restores original `fetch`.
-3. **Unit — `config.ts`:** schema defaults and validation errors.
-4. **Unit — `proxy.ts`:** body construction (Anthropic messages shape), header assembly (fingerprint + captcha pair present), code mapping table.
-5. **E2E (the "verify thing"):** OMP CLI one-shot with `modelRoles.default: zai-start-plan/glm-5.2` (temp config overlay), ZCode app running; prompt "reply with the word OK only"; assert 200 + SSE events + `stopReason: end_turn` + usage tokens through the relay; then capture-disabled negative run → assert mapped 3007-style error, not a hang.
-
-## 9. Out of scope today
-
-- Approach 2 (standalone header source) — rejected; would defeat F4 and was flagged to the user. Can be revisited only on explicit user instruction.
-- BigModel / coding-plan consumption until the account actually holds them (`mode: static` is the intended cutover path).
-- Windows/macOS host support (fingerprint constants are linux-x64 today; platform fields are config-driven so they can be extended without structural change).
+1. Unit: OAuth callback/state and token response validation.
+2. Unit: Electron broker request correlation, restart, timeout, and per-request non-reuse.
+3. Unit: Anthropic body conversion for text, thinking, tools, and tool results.
+4. Unit: SSE conversion and usage accumulation.
+5. Unit: billing payload normalization with multiple entitlement buckets and account identity.
+6. Unit: diagnostics redact all credential and CAPTCHA material.
+7. Type-check the extension.
+8. Run `/login zcode-start-plan` and verify the account appears in OMP auth storage.
+9. Run native `/usage` and verify Weekend Build/trial/Turbo buckets.
+10. Run two consecutive direct OMP turns through `zcode-start-plan/glm-5.3`; both must succeed, proving fresh verification per request.
+11. Run `omp -p --no-tools --no-session --model zcode-start-plan/glm-5.3 --thinking low 'Reply with exactly OMP_PLUGIN_OK.'` and observe `OMP_PLUGIN_OK`.
+12. Run `/zcode-status` and confirm diagnostics contain no secrets.

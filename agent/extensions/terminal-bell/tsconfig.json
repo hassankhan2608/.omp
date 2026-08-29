@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "types": ["bun"],
+    "paths": {
+      "@oh-my-pi/pi-coding-agent": [
+        "/home/laughingman/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/types/index.d.ts"
+      ],
+      "@oh-my-pi/pi-coding-agent/extensibility/extensions": [
+        "/home/laughingman/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/types/extensibility/extensions/index.d.ts"
+      ]
+    },
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

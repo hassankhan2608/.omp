@@ -1,0 +1,107 @@
+symbolPreset: nerd
+theme:
+  dark: anthracite
+  light: light
+setupVersion: 2
+modelRoles:
+  vision: opencode-zen/mimo-v2.5-free
+  smol: tokenrouter/z-ai/glm-5.3-free:auto
+  commit: opencode-zen/big-pickle
+  advisor: opencode-zen/big-pickle
+  slow: tokenrouter/z-ai/glm-5.3-free:auto
+  tiny: tokenrouter/qwen/qwen3.8-max-free
+  default: tokenrouter/z-ai/glm-5.3-free
+lsp:
+  formatOnWrite: true
+defaultThinkingLevel: auto
+hideThinkingBlock: false
+extensions:
+  - ~/.config/omp/agent/extensions/terminal-bell/src/terminal-bell.ts
+disabledExtensions:
+  - extension-module:bash-policy
+github:
+  enabled: true
+browser:
+  headless: false
+  relay: false
+  relayUrl: ""
+  enabled: true
+dev:
+  autoqaConsent: granted
+  autoqa: false
+tui:
+  textSizing: true
+  hyperlinks: "off"
+  codexResetFireworks: true
+  tight: false
+display:
+  showTokenUsage: true
+  shimmer: classic
+  cacheMissMarker: true
+  showTurnTime: true
+providers:
+  tts: auto
+  imageOrder:
+    - openai-codex
+    - antigravity
+  webSearchGeminiModel: gemini-3.6-flash
+  webSearchOrder:
+    - firecrawl
+    - gemini
+    - exa
+    - duckduckgo
+  memoryModel: online
+speech:
+  voice: af_heart
+generate_image:
+  enabled: false
+statusLine:
+  compactThinkingLevel: true
+  showHookStatus: true
+  preset: default
+  leftSegments:
+    - model
+    - mode
+    - path
+    - git
+  rightSegments:
+    - session_name
+    - context_pct
+    - cost
+  separator: powerline-thin
+  transparent: true
+  sessionAccent: true
+autoResume: false
+task:
+  enableLsp: true
+security:
+  enabled: true
+memory:
+  backend: mnemopi
+shellMinimizer:
+  sourceOutlineLevel: default
+astGrep:
+  enabled: false
+grep:
+  enabled: true
+doubleEscapeAction: tree
+secrets:
+  enabled: true
+checkpoint:
+  enabled: true
+terminal:
+  showProgress: false
+mcp:
+  notifications: false
+title:
+  refreshOnReplan: true
+retry:
+  fallbackChains:
+    google-antigravity/gemini-3.1-flash-lite:
+      - google-antigravity/gemini-3.7-flash-tiered
+  usageAwareFallback: true
+composer:
+  shape: pi
+extendedContext: true
+error:
+  notify: "on"

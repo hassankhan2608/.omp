@@ -1,0 +1,83 @@
+{
+  "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "enabled": true
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "enabled": true
+    },
+    "axiom": {
+      "type": "http",
+      "url": "https://mcp.axiom.co/mcp",
+      "enabled": false
+    },
+    "mongodb-flobridge": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mongodb-mcp-server@0.3.0",
+        "--readOnly"
+      ],
+      "env": {
+        "MDB_MCP_CONNECTION_STRING": "${MONGODB_URI}"
+      },
+      "enabled": false
+    },
+    "clickhouse-flobridge": {
+      "command": "/usr/bin/uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp-clickhouse",
+        "--python",
+        "3.10",
+        "mcp-clickhouse"
+      ],
+      "env": {
+        "CLICKHOUSE_HOST": "${CLICKHOUSE_HOST}",
+        "CLICKHOUSE_PORT": "${CLICKHOUSE_PORT}",
+        "CLICKHOUSE_DATABASE": "${CLICKHOUSE_DATABASE}",
+        "CLICKHOUSE_USER": "${CLICKHOUSE_USER}",
+        "CLICKHOUSE_PASSWORD": "${CLICKHOUSE_PASSWORD}",
+        "CLICKHOUSE_SECURE": "${CLICKHOUSE_SECURE}",
+        "CLICKHOUSE_VERIFY": "${CLICKHOUSE_VERIFY}"
+      },
+      "enabled": false
+    },
+    "StitchMCP": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://stitch.googleapis.com/mcp",
+        "--oauth-scopes",
+        "https://www.googleapis.com/auth/cloud-platform"
+      ],
+      "enabled": false
+    },
+    "colab": {
+      "command": "uvx",
+      "args": [
+        "git+https://github.com/googlecolab/colab-mcp"
+      ],
+      "timeout": 30000,
+      "enabled": false
+    },
+    "vercel": {
+      "type": "http",
+      "url": "https://mcp.vercel.com",
+      "enabled": false
+    }
+  }
+}

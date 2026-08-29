@@ -1,0 +1,25 @@
+{
+  "$schema": "./config.schema.json",
+  "enabled": true,
+  "debounceMs": 500,
+  "focusTerminal": false,
+  "sounds": {
+    "complete": {
+      "enabled": true,
+      "file": "complete.oga"
+    },
+    "input": {
+      "enabled": true,
+      "file": "minecraft_item_drop.mp3"
+    },
+    "error": {
+      "enabled": true,
+      "file": "message.oga"
+    }
+  },
+  "events": {
+    "agent.complete": "complete",
+    "approval.requested": "input",
+    "agent.error": "error"
+  }
+}

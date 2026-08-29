@@ -1,0 +1,22 @@
+{
+  "name": "omp-undo-redo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "omp": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-coding-agent": "^18.0.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.4",
+    "typescript": "5.9.3"
+  }
+}

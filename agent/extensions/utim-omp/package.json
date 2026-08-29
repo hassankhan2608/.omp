@@ -1,0 +1,11 @@
+{
+  "name": "utim-omp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "omp-native UTIM auth provider: device-flow login via /login utim, native /logout and multi-account.",
+  "omp": {
+    "name": "UTIM Auth",
+    "description": "Registers UTIM as an omp provider so /login utim runs the device flow through omp's OAuth UI; /logout and multi-account are native.",
+    "extensions": ["./index.ts"]
+  }
+}

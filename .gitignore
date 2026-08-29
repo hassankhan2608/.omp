@@ -1,0 +1,64 @@
+# Runtime logs and process state
+logs/
+run/
+
+# Session and terminal history
+agent/sessions/
+agent/terminal-sessions/
+agent/cache/
+
+# Live SQLite state and model caches
+agent/*.db
+agent/*.db-shm
+agent/*.db-wal
+
+# Machine-local identifiers and update state
+install-id
+gpu_cache.json
+agent/last-changelog-version
+
+# Installed dependencies and generated output
+**/node_modules/
+**/index.js
+**/*.tsbuildinfo
+
+# Secrets
+.env
+agent/secret-placeholder.key
+agent/ssh.json
+
+# Local mnemopi memory banks (private session content)
+agent/memories/
+
+# Generated blobs and cached data
+agent/blobs/
+
+# Built extension bundles
+agent/extensions/*.zip
+
+# Runtime state at repo root
+autoqa.db
+stats.db
+stats.db-shm
+stats.db-wal
+cache/
+puppeteer/
+plugins/
+plugins/node_modules/
+
+# Isolated feature worktrees
+.worktrees/
+# Stale sqlite from crashes (the agent/*.db rule only matches exact name)
+agent/*.db.corrupt-*
+agent/*.db.corrupt-*-shm
+agent/*.db.corrupt-*-wal
+
+# Per-extension dev probes / one-off smoke scripts
+agent/extensions/*/live-*.ts
+agent/extensions/*/test-*.ts
+agent/extensions/*/probe-*.ts
+
+# Leftover JS from a TS project
+agent/extensions/**/*.mjs
+
+agent/extensions/omp-zcode-start-plan/profiles.db*

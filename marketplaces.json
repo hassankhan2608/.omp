@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "marketplaces": [
+    {
+      "name": "superpowers-marketplace",
+      "sourceType": "github",
+      "sourceUri": "obra/superpowers-marketplace",
+      "catalogPath": "/home/laughingman/.config/omp/plugins/cache/marketplaces/superpowers-marketplace/marketplace.json",
+      "addedAt": "2026-08-25T05:15:49.666Z",
+      "updatedAt": "2026-08-29T06:10:42.029Z"
+    },
+    {
+      "name": "claude-plugins-official",
+      "sourceType": "github",
+      "sourceUri": "anthropics/claude-plugins-official",
+      "catalogPath": "/home/laughingman/.config/omp/plugins/cache/marketplaces/claude-plugins-official/marketplace.json",
+      "addedAt": "2026-08-25T05:25:17.477Z",
+      "updatedAt": "2026-08-29T06:10:44.157Z"
+    },
+    {
+      "name": "claude-community",
+      "sourceType": "github",
+      "sourceUri": "anthropics/claude-plugins-community",
+      "catalogPath": "/home/laughingman/.config/omp/plugins/cache/marketplaces/claude-community/marketplace.json",
+      "addedAt": "2026-08-25T05:25:21.534Z",
+      "updatedAt": "2026-08-29T06:10:45.788Z"
+    },
+    {
+      "name": "claude-code-workflows",
+      "sourceType": "github",
+      "sourceUri": "wshobson/agents",
+      "catalogPath": "/home/laughingman/.config/omp/plugins/cache/marketplaces/claude-code-workflows/marketplace.json",
+      "addedAt": "2026-08-25T05:25:25.703Z",
+      "updatedAt": "2026-08-29T06:10:47.668Z"
+    },
+    {
+      "name": "claude-code-plugins",
+      "sourceType": "github",
+      "sourceUri": "anthropics/claude-code",
+      "catalogPath": "/home/laughingman/.config/omp/plugins/cache/marketplaces/claude-code-plugins/marketplace.json",
+      "addedAt": "2026-08-25T05:25:36.994Z",
+      "updatedAt": "2026-08-29T06:10:50.474Z"
+    },
+    {
+      "name": "compound-engineering-plugin",
+      "sourceType": "github",
+      "sourceUri": "EveryInc/every-marketplace",
+      "catalogPath": "/home/laughingman/.config/omp/plugins/cache/marketplaces/compound-engineering-plugin/marketplace.json",
+      "addedAt": "2026-08-25T05:25:42.523Z",
+      "updatedAt": "2026-08-29T06:10:53.825Z"
+    },
+    {
+      "name": "darkphilosophy",
+      "sourceType": "github",
+      "sourceUri": "DarkPhilosophy/omp-marketplace",
+      "catalogPath": "/home/laughingman/.config/omp/plugins/cache/marketplaces/darkphilosophy/marketplace.json",
+      "addedAt": "2026-08-25T14:50:06.864Z",
+      "updatedAt": "2026-08-29T06:10:55.081Z"
+    }
+  ]
+}

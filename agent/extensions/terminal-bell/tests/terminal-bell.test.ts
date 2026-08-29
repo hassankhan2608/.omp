@@ -20,7 +20,7 @@ function config(overrides: Partial<BellConfig> = {}): BellConfig {
 }
 
 describe("terminal notifier", () => {
-  test("plays mapped sounds, rings optionally, and debounces globally", async () => {
+  test("debounces per event type and lets other events through", async () => {
     const commands: string[][] = [];
     let rings = 0;
     let now = 1_000;
@@ -34,12 +34,20 @@ describe("terminal notifier", () => {
     expect(commands).toEqual([["paplay", "/extension/sounds/complete.oga"]]);
     expect(rings).toBe(1);
 
+    // Same event within debounce: suppressed.
+    expect(await notifier.notify("agent.complete")).toBe(false);
+
+    // Different event at the same time: rings because each event has its own debounce.
+    expect(await notifier.notify("approval.requested")).toBe(true);
+    expect(commands[1]).toEqual(["paplay", "/extension/sounds/minecraft_item_drop.mp3"]);
+    expect(rings).toBe(2);
+
     now = 1_499;
     expect(await notifier.notify("approval.requested")).toBe(false);
     now = 1_500;
     expect(await notifier.notify("approval.requested")).toBe(true);
-    expect(commands[1]).toEqual(["paplay", "/extension/sounds/minecraft_item_drop.mp3"]);
-    expect(rings).toBe(2);
+    expect(commands[2]).toEqual(["paplay", "/extension/sounds/minecraft_item_drop.mp3"]);
+    expect(rings).toBe(3);
   });
 
   test("does nothing when the plugin or selected sound is disabled", async () => {
@@ -75,26 +83,32 @@ describe("OMP event mapping", () => {
     const pi = {
       on: (event: string, handler: unknown) => handlers.set(event, handler as Handler),
     } as unknown as ExtensionAPI;
-    const notifications: string[] = [];
-    registerBellHandlers(pi, Promise.resolve({
-      notify: async (event) => {
-        notifications.push(event);
-        return true;
-      },
-    }));
+    const commands: string[][] = [];
+    let now = 1_000;
+    const notifier = new TerminalNotifier(config(), "/extension", {
+      now: () => now,
+      spawn: (command) => commands.push(command),
+      ring: () => undefined,
+    });
+    registerBellHandlers(pi, Promise.resolve(notifier));
 
     await handlers.get("session_start")?.({}, { hasUI: true });
+    // OMP and permission-gate both emit approval.requested for the same ask.
+    // Per-event debounce in TerminalNotifier collapses them to one ring.
     process.emit("omp:approval-requested", { source: "bash-policy" });
-    await Promise.resolve();
-    expect(notifications).toEqual(["approval.requested"]);
-
     await handlers.get("tool_approval_requested")?.({}, { hasUI: true });
-    expect(notifications).toEqual(["approval.requested", "approval.requested"]);
-
-    await handlers.get("session_shutdown")?.({}, { hasUI: true });
-    process.emit("omp:approval-requested", { source: "bash-policy" });
     await Promise.resolve();
-    expect(notifications).toHaveLength(2);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toEqual(["paplay", "/extension/sounds/minecraft_item_drop.mp3"]);
+
+    // After shutdown the process listener is removed, but the OMP
+    // tool_approval_requested hook remains subscribed. Advancing the clock
+    // past the debounce window lets the surviving path ring again.
+    await handlers.get("session_shutdown")?.({}, { hasUI: true });
+    now = 10_000;
+    await handlers.get("tool_approval_requested")?.({}, { hasUI: true });
+    await Promise.resolve();
+    expect(commands).toHaveLength(2);
   });
 });
 

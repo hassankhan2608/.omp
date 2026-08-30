@@ -32,6 +32,7 @@ tui:
   hyperlinks: "off"
   codexResetFireworks: true
   tight: false
+  resizeScrollback: append
 display:
   showTokenUsage: true
   shimmer: classic
@@ -72,6 +73,7 @@ statusLine:
 autoResume: false
 task:
   enableLsp: true
+  showResolvedModelBadge: true
 security:
   enabled: true
 memory:

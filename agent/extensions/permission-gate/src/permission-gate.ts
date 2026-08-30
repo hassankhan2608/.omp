@@ -17,6 +17,7 @@ import { LEVEL_ORDER, loadConfig, type PermissionGateConfig, type PermissionLeve
 import { assessPath, externalGrantRoot } from "./paths";
 import { commandGrantPattern, resolveCommand } from "./policy";
 import { analyzeBash, safetyRequiresApproval, warmBashParser, type BashAnalysis } from "./shell";
+import { extractToolPaths, type GatedPathTool } from "./tool-paths";
 
 interface ExtensionTimeoutControl {
   testSetExtensionHandlerTimeoutMs(timeoutMs: number): void;
@@ -114,7 +115,10 @@ export default function permissionGate(pi: ExtensionAPI, agentDirectory: string 
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "bash") return;
+    const gatedPathTool: GatedPathTool | undefined = event.toolName === "edit" || event.toolName === "write"
+      ? event.toolName
+      : undefined;
+    if (event.toolName !== "bash" && gatedPathTool === undefined) return;
     const runtime = await initialize();
     if (!runtime.config) {
       return deny(runtime.error?.message ?? "Permission Gate failed to initialize", event.toolName);
@@ -122,7 +126,8 @@ export default function permissionGate(pi: ExtensionAPI, agentDirectory: string 
     const config = runtime.config;
     const input = event.input as Record<string, unknown>;
     const level = currentLevel(ctx, config.defaultLevel);
-    const summary = String(input.command ?? "").trim();
+    const extraction = gatedPathTool ? extractToolPaths(gatedPathTool, input) : undefined;
+    const summary = extraction ? extraction.preview : String(input.command ?? "").trim();
     const items: ApprovalItem[] = [];
     const reasons: string[] = [];
     const pathContexts: string[] = [];
@@ -146,24 +151,33 @@ export default function permissionGate(pi: ExtensionAPI, agentDirectory: string 
       reasons.push("PTY execution can expose interactive shell behavior");
     }
 
-    try {
-      analysis = await analyzeBash(String(input.command ?? ""));
-      bashPaths = analysis.paths;
-    } catch (error) {
-      needsApproval = true;
-      persistable = false;
-      reasons.push(`Bash parser unavailable: ${(error as Error).message}`);
-    }
-    if (analysis?.catastrophicReason) return deny(analysis.catastrophicReason, summary);
-    if (analysis?.malformed) {
-      needsApproval = true;
-      persistable = false;
-      reasons.push("Malformed or incomplete Bash syntax");
-    }
-    if (analysis && analysis.commands.length === 0 && summary) {
-      needsApproval = true;
-      persistable = false;
-      reasons.push("No executable command could be resolved");
+    if (extraction) {
+      bashPaths = extraction.paths;
+      if (!extraction.complete) {
+        needsApproval = true;
+        persistable = false;
+        reasons.push(`Could not identify every ${event.toolName} target`);
+      }
+    } else {
+      try {
+        analysis = await analyzeBash(String(input.command ?? ""));
+        bashPaths = analysis.paths;
+      } catch (error) {
+        needsApproval = true;
+        persistable = false;
+        reasons.push(`Bash parser unavailable: ${(error as Error).message}`);
+      }
+      if (analysis?.catastrophicReason) return deny(analysis.catastrophicReason, summary);
+      if (analysis?.malformed) {
+        needsApproval = true;
+        persistable = false;
+        reasons.push("Malformed or incomplete Bash syntax");
+      }
+      if (analysis && analysis.commands.length === 0 && summary) {
+        needsApproval = true;
+        persistable = false;
+        reasons.push("No executable command could be resolved");
+      }
     }
 
     const identities: CommandIdentity[] = (analysis?.commands ?? []).map(canonicalizeCommand);

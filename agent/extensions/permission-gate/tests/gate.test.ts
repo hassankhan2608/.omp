@@ -25,6 +25,7 @@ import {
 } from "../src/config";
 import { assessPath, externalGrantRoot, isPathWithin } from "../src/paths";
 import { patternMatches, resolveCommand } from "../src/policy";
+import { extractToolPaths } from "../src/tool-paths";
 import { analyzeBash } from "../src/shell";
 
 const temporaryDirectories: string[] = [];
@@ -594,7 +595,7 @@ describe("OMP approval UI and runtime", () => {
     unregisterSession(parent);
   });
 
-  test("bypasses every non-Bash tool call without opening Permission Gate", async () => {
+  test("bypasses ungated tools and internal device writes without opening Permission Gate", async () => {
     const cwd = await temporaryDirectory();
     let prompts = 0;
     const ctx = context("bash-only", cwd, true, async () => {
@@ -683,7 +684,83 @@ describe("OMP approval UI and runtime", () => {
     await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
   });
 
-  test("applies temporary and external path rules only to Bash commands", async () => {
+  test("reuses one external directory grant across bash, write, and edit", async () => {
+    const root = await temporaryDirectory();
+    const cwd = join(root, "project");
+    await mkdir(cwd);
+    // Never created on disk: Permission Gate only classifies these targets.
+    const outside = join("/var/tmp", `permission-gate-${Date.now()}`);
+    let prompts = 0;
+    const ctx = context("shared-paths", cwd, true, async (_prompt, options) => {
+      prompts++;
+      return options.find((option) => option.startsWith("Allow ")) ?? "Approve once";
+    });
+    const fake = fakeExtension();
+    extension(fake.api, join(root, "agent"));
+    await fake.handlers.get("session_start")!({ type: "session_start" }, ctx);
+    const toolCall = fake.handlers.get("tool_call")!;
+
+    expect(await toolCall({
+      toolName: "write",
+      input: { path: join(outside, "a.txt"), content: "x" },
+    }, ctx)).toBeUndefined();
+    expect(prompts).toBe(1);
+
+    expect(await toolCall({
+      toolName: "write",
+      input: { path: join(outside, "nested", "b.txt"), content: "x" },
+    }, ctx)).toBeUndefined();
+    expect(await toolCall({
+      toolName: "edit",
+      input: { input: `[${join(outside, "c.ts")}#A1B2]\nPUT 1.=1:\n+x\n` },
+    }, ctx)).toBeUndefined();
+    expect(await toolCall({
+      toolName: "bash",
+      input: { command: `cat ${join(outside, "a.txt")}` },
+    }, ctx)).toBeUndefined();
+    expect(prompts).toBe(1);
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+  });
+
+  test("extracts write and edit targets and bypasses internal device writes", () => {
+    expect(extractToolPaths("write", { path: "/srv/out.txt", content: "x" }).paths).toEqual(["/srv/out.txt"]);
+    expect(extractToolPaths("write", { path: "[src/a.ts#A1B2]", content: "x" }).paths).toEqual(["src/a.ts"]);
+    expect(extractToolPaths("write", { path: "xd://browser", content: "{}" }).paths).toEqual([]);
+    expect(extractToolPaths("edit", { input: "[src/a.ts#A1B2]\nCUT 1.=1\n" }).paths).toEqual(["src/a.ts"]);
+    expect(extractToolPaths("edit", {
+      patch: "*** Begin Patch\n*** Update File: src/b.ts\n*** End Patch\n",
+    }).paths).toEqual(["src/b.ts"]);
+    expect(extractToolPaths("edit", { path: "src/c.ts", edits: [] }).paths).toEqual(["src/c.ts"]);
+    expect(extractToolPaths("edit", {
+      edits: [{ path: "src/d.ts" }, { filePath: "src/e.ts" }],
+    }).paths).toEqual(["src/d.ts", "src/e.ts"]);
+    expect(extractToolPaths("edit", { input: "no header here" }).complete).toBe(false);
+  });
+
+  test("asks once without a reusable rule for an unparseable edit payload", async () => {
+    const root = await temporaryDirectory();
+    const cwd = join(root, "project");
+    await mkdir(cwd);
+    let offered: string[] = [];
+    let prompts = 0;
+    const ctx = context("edit-unparseable", cwd, true, async (_prompt, options) => {
+      prompts++;
+      offered = options;
+      return "Approve once";
+    });
+    const fake = fakeExtension();
+    extension(fake.api, join(root, "agent"));
+    await fake.handlers.get("session_start")!({ type: "session_start" }, ctx);
+    expect(await fake.handlers.get("tool_call")!({
+      toolName: "edit",
+      input: { input: "totally unparseable payload" },
+    }, ctx)).toBeUndefined();
+    expect(prompts).toBe(1);
+    expect(offered).toEqual(["Approve once", "Deny"]);
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+  });
+
+  test("applies temporary and external path rules to gated tool surfaces", async () => {
     const root = await temporaryDirectory();
     const agentDirectory = join(root, "agent");
     const cwd = join(root, "project");

@@ -16,6 +16,8 @@ export interface CommandSafety {
 export interface BashCommandUnit {
   text: string;
   executable?: string;
+  /** Command word exactly as written, so path-qualified binaries stay distinguishable. */
+  executableWord?: string;
   arguments: string[];
   safety?: CommandSafety;
 }
@@ -853,6 +855,7 @@ function walkCommands(
     units.push({
       text,
       executable,
+      executableWord: words[0],
       arguments: words.slice(1),
       safety: commandSafety(text, redirected, nextBackgrounded),
     });

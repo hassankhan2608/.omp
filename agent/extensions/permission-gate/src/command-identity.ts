@@ -20,6 +20,13 @@ export interface CommandIdentity {
 const PEELABLE_WRAPPERS: Record<string, true> = { timeout: true, time: true };
 
 /**
+ * Indirection floors this module can actually resolve. Any other wrapper
+ * (`eval`, `env`, `xargs`, `nohup`, `watch`, …) keeps its always-ask floor,
+ * because the command it runs is data we cannot classify.
+ */
+const NORMALIZABLE_INDIRECTION: Record<string, true> = { timeout: true, time: true, command: true };
+
+/**
  * Executables that can run arbitrary programs. A wrapper around any of these
  * cannot inherit the inner command's policy, because the inner text is data.
  */
@@ -168,6 +175,12 @@ function resolveWrapper(
   if (!childExecutable || /[$`]/.test(childName)) {
     return { ...unchanged, safety: { reason: "Wrapped command name is dynamic", persistable: false } };
   }
+  if (childName.toLowerCase() !== childExecutable) {
+    return {
+      ...unchanged,
+      safety: { reason: "Wrapped command uses a path-qualified executable", persistable: false },
+    };
+  }
   if (INTERPRETERS[childExecutable]) {
     return {
       ...unchanged,
@@ -216,9 +229,16 @@ export function canonicalizeCommand(unit: BashCommandUnit): CommandIdentity {
   };
   if (!unit.executable) return base;
 
-  // Floors that describe the invocation itself (redirection, background
-  // execution, inline environment, opaque interpreters) survive normalization.
-  if (unit.safety && unit.safety.indirection === undefined) return base;
+  // A path-qualified command runs an on-disk binary that merely shares a name
+  // with a trusted tool, so it must never inherit that tool's policy.
+  if (unit.executableWord !== undefined && unit.executableWord.toLowerCase() !== unit.executable) return base;
+
+  // Floors describing the invocation itself (redirection, background execution,
+  // inline environment, opaque interpreters) survive normalization. Only
+  // indirection this module can actually resolve may be re-derived.
+  if (unit.safety && !(unit.safety.indirection !== undefined && NORMALIZABLE_INDIRECTION[unit.safety.indirection])) {
+    return base;
+  }
 
   const resolved = resolveCommandShape(unit.executable, unit.arguments, 0);
   const safety = resolved.safety ?? commandSafetyFor(resolved.executable, resolved.arguments);

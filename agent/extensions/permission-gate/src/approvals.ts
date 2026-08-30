@@ -129,14 +129,14 @@ export function registerSession(ctx: ExtensionContext, defaultLevel: PermissionL
 export function unregisterSession(ctx: ExtensionContext): void {
   const state = broker();
   const sessionId = ctx.sessionManager.getSessionId();
-  // Only the owning interactive session may retire the shared namespace.
-  if (state.parentSessionId !== undefined && state.parentSessionId !== sessionId) return;
-  state.grants.delete(sessionId);
-  state.levels.delete(sessionId);
   if (state.parentSessionId === sessionId) {
     state.parentSessionId = undefined;
     state.parentUi = undefined;
   }
+  // Removing only this session's bucket keeps shared parent grants intact while
+  // still reclaiming anything stored before a parent registered.
+  state.grants.delete(sessionId);
+  state.levels.delete(sessionId);
 }
 
 export function currentLevel(ctx: ExtensionContext, fallback: PermissionLevel): PermissionLevel {

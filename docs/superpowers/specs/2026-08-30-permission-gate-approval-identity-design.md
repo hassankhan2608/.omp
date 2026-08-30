@@ -242,7 +242,7 @@ Add or recognize these evidenced classes:
 - `strings`, `qmllint`, `fold`, and `od`.
 - `tailscale status` and `tailscale ping`.
 - Exact OMP inspection forms: `omp --help`, `omp --version`, `omp models` list/search forms, and `omp plugin list`. Refresh, install, link, enable, disable, and uninstall forms remain gated.
-- `openssl rand` to standard output; `-out` remains a write assessed at its target path.
+- `openssl rand` to standard output; `-out`, `-writerand`, and every other file-writing option remain writes assessed at their target paths.
 - `unzip -l`.
 - `journalctl` inspection forms excluding `--vacuum-*`, `--rotate`, `--sync`, `--flush`, and other mutating options.
 
@@ -254,7 +254,7 @@ Add narrowly matched forms:
 
 - Prettier `--write`.
 - Biome format/write and safe fix forms. Other formatters remain gated until individually added with positive and mutating negative tests.
-- `sed -i` and `perl -i` only with project-contained or session-granted target paths.
+- Arbitrary `sed -i` and `perl -i` remain gated. Their program arguments can execute commands or perform transformations that path checks alone cannot classify safely.
 - Archive extraction with project-contained or session-granted destinations.
 - `truncate` with project-contained or session-granted targets.
 - GitHub issue `create`, `edit`, `comment`, `close`, and `reopen`; and PR `create`, `edit`, `comment`, `review`, `close`, and `reopen`. Merge, repository administration, release, credential, secret, and workflow-privilege operations remain gated.

@@ -99,18 +99,33 @@ const ALWAYS_INDIRECT: Record<string, true> = {
   sudo: true, timeout: true, time: true, watch: true, xargs: true,
 };
 const SHELLS: Record<string, true> = { bash: true, dash: true, fish: true, ksh: true, sh: true, zsh: true };
-const PATH_COMMANDS: Record<string, true> = {
-  cat: true, cd: true, chmod: true, chown: true, cp: true, du: true, file: true, head: true, less: true,
-  ln: true, ls: true, mkdir: true, mv: true, readlink: true, realpath: true, rm: true, rmdir: true,
-  stat: true, tail: true, tee: true, touch: true, tree: true, wc: true,
-};
-const SEARCH_COMMANDS: Record<string, true> = {
-  ack: true, ag: true, fd: true, find: true, grep: true, locate: true, rg: true,
-};
 const SENSITIVE_BASENAMES: Record<string, true> = {
   ".env": true, ".netrc": true, ".npmrc": true, ".pypirc": true, credentials: true,
   id_ed25519: true, id_rsa: true,
 };
+
+const CREDENTIAL_DATA_EXTENSIONS: Record<string, true> = {
+  json: true,
+  txt: true,
+  yaml: true,
+  yml: true,
+  toml: true,
+  db: true,
+  sqlite: true,
+  sqlite3: true,
+  enc: true,
+  key: true,
+};
+
+/** Bare credential filenames need assessment even without a slash. */
+function isSensitiveBasename(basename: string): boolean {
+  if (SENSITIVE_BASENAMES[basename]) return true;
+  const lower = basename.toLowerCase();
+  const extension = /\.([a-z0-9]+)$/.exec(lower)?.[1];
+  const stem = extension ? lower.slice(0, -(extension.length + 1)) : lower;
+  const credentialWord = /(?:^|[-_.])(tokens?|credentials|auth)(?:$|[-_.])/.test(stem);
+  return credentialWord && (extension === undefined || CREDENTIAL_DATA_EXTENSIONS[extension] === true);
+}
 
 interface CommandSafetyRule {
   reason: string;
@@ -785,10 +800,16 @@ function catastrophicReason(command: string, units: BashCommandUnit[]): string |
 
 function looksLikePath(word: string): boolean {
   if (!word || word === "-" || word.startsWith("--")) return false;
-  if (/^(?:[A-Za-z]+:)?\/\//.test(word)) return false;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(word)) return false;
+  if (/^(?:@)?[<(]/.test(word)) return false;
+  // Explicit filesystem spelling is unambiguous, including // and quoted paths with spaces.
+  if (/^(?:\/|\.\/|\.\.\/|~(?:\/|$))/.test(word)) return true;
   const basename = word.split("/").at(-1) ?? word;
-  return word.startsWith("/") || word.startsWith("./") || word.startsWith("../") || word.startsWith("~")
-    || word.includes("/") || word.startsWith(".") || SENSITIVE_BASENAMES[basename] === true;
+  if (isSensitiveBasename(basename)) return true;
+  // Prose, programs, structured bodies, and shell syntax are data, not paths.
+  if (/[\s"'`{}[\]();|&<>$\\]/.test(word)) return false;
+  // Bare relative subtrees remain useful for symlink-aware path assessment.
+  return /^[A-Za-z0-9_.@%+=,-]+(?:\/[A-Za-z0-9_.@%+=,-]+)+$/.test(word);
 }
 
 const CURL_FILE_OPTIONS: Record<string, true> = {
@@ -801,6 +822,10 @@ const CURL_FILE_OPTIONS: Record<string, true> = {
   "--key": true,
   "--cacert": true,
   "--capath": true,
+  "--proxy-cert": true,
+  "--proxy-key": true,
+  "--proxy-cacert": true,
+  "--crlfile": true,
   "-c": true,
   "--cookie-jar": true,
   "-K": true,
@@ -811,9 +836,17 @@ const CURL_FILE_OPTIONS: Record<string, true> = {
   "--trace": true,
   "--trace-ascii": true,
   "--output-dir": true,
+  "--unix-socket": true,
+  "--abstract-unix-socket": true,
+  "--alt-svc": true,
+  "--hsts": true,
+  "--etag-compare": true,
+  "--etag-save": true,
 };
 
 const CURL_AT_FILE_OPTIONS: Record<string, true> = {
+  "-b": true,
+  "--cookie": true,
   "-d": true,
   "--data": true,
   "--data-ascii": true,
@@ -824,10 +857,22 @@ const CURL_AT_FILE_OPTIONS: Record<string, true> = {
   "--form": true,
 };
 
+const CURL_SHORT_FILE_OPTIONS: Record<string, true> = {
+  o: true, T: true, E: true, c: true, K: true, D: true,
+};
+const CURL_SHORT_AT_FILE_OPTIONS: Record<string, true> = { b: true, d: true, F: true };
+const CURL_SHORT_VALUE_OPTIONS: Record<string, true> = {
+  A: true, C: true, H: true, P: true, Q: true, U: true, X: true,
+  e: true, m: true, r: true, t: true, u: true, w: true, x: true, y: true, Y: true, z: true,
+};
+
 function curlEmbeddedFile(value: string): string | undefined {
-  const marker = /(?:^|=)(?:@|<)(.+)$/.exec(value) ?? /^(?:@|<)(.+)$/.exec(value);
-  const path = marker?.[1];
-  return path && path !== "-" ? path : undefined;
+  const marker = /(?:^|=)(?:@|<)(.+)$/.exec(value)
+    ?? /^[^@=]+@(.+)$/.exec(value)
+    ?? /^(?:@|<)(.+)$/.exec(value);
+  const path = marker?.[1]?.split(";")[0];
+  if (!path || path === "-" || /^[<(]/.test(path)) return undefined;
+  return looksLikePath(path) ? path : undefined;
 }
 
 /** Curl has data-bearing options whose values commonly contain `/`; only its file-bearing options are paths. */
@@ -857,15 +902,198 @@ function curlPaths(arguments_: readonly string[]): string[] {
       if (path) paths.push(path);
       continue;
     }
-    if (/^-[oTEcKD].+/.test(argument)) {
-      const value = argument.slice(2);
-      if (value && value !== "-") paths.push(value);
+    if (!/^-[^-].+/.test(argument)) continue;
+    const short = argument.slice(1);
+    for (let offset = 0; offset < short.length; offset++) {
+      const flag = short[offset]!;
+      const attached = short.slice(offset + 1);
+      if (CURL_SHORT_FILE_OPTIONS[flag]) {
+        const value = attached || arguments_[++index];
+        if (value && value !== "-") paths.push(value);
+        break;
+      }
+      if (CURL_SHORT_AT_FILE_OPTIONS[flag]) {
+        const value = attached || arguments_[++index];
+        const path = value ? curlEmbeddedFile(value) : undefined;
+        if (path) paths.push(path);
+        break;
+      }
+      if (CURL_SHORT_VALUE_OPTIONS[flag]) {
+        if (!attached) index++;
+        break;
+      }
+    }
+  }
+  return paths;
+}
+
+const DATA_ONLY_COMMANDS: Record<string, true> = {
+  echo: true,
+  printf: true,
+  type: true,
+  whereis: true,
+  which: true,
+};
+
+const GIT_FILE_OPTIONS: Record<string, true> = {
+  "-C": true,
+  "--git-dir": true,
+  "--work-tree": true,
+  "-F": true,
+  "--file": true,
+  "--pathspec-from-file": true,
+  "--exclude-from": true,
+  "--output": true,
+};
+
+const GIT_TEXT_OPTIONS: Record<string, true> = {
+  "-m": true,
+  "--message": true,
+  "--author": true,
+  "--date": true,
+  "--format": true,
+  "--pretty": true,
+  "--grep": true,
+  "--exec": true,
+  "--upload-pack": true,
+};
+
+const GIT_PATH_SUBCOMMANDS: Record<string, true> = {
+  add: true, apply: true, archive: true, blame: true, "check-ignore": true, clean: true,
+  diff: true, grep: true, "ls-files": true, log: true, mv: true, restore: true, rm: true,
+  show: true, status: true,
+};
+
+function gitPathspecPath(argument: string): string | undefined {
+  let path = argument;
+  if (path.startsWith(":(")) {
+    const close = path.indexOf(")");
+    if (close < 0) return undefined;
+    path = path.slice(close + 1);
+  } else if (/^:[:!^/]/.test(path)) {
+    path = path.slice(2);
+  }
+  return path && looksLikePath(path) ? path : undefined;
+}
+
+/** Git revisions and messages commonly contain `/`; only explicit path positions are assessed. */
+function gitPaths(arguments_: readonly string[]): string[] {
+  const paths: string[] = [];
+  let subcommand: string | undefined;
+  let afterSeparator = false;
+  for (let index = 0; index < arguments_.length; index++) {
+    const argument = arguments_[index]!;
+    if (argument === "--") {
+      afterSeparator = true;
       continue;
     }
-    if (/^-d.+/.test(argument)) {
-      const path = curlEmbeddedFile(argument.slice(2));
+    const equals = argument.indexOf("=");
+    const option = equals > 0 ? argument.slice(0, equals) : argument;
+    const inlineValue = equals > 0 ? argument.slice(equals + 1) : undefined;
+    if (subcommand === "clean" && (option === "-e" || option === "--exclude")) {
+      if (inlineValue === undefined) index++;
+      continue;
+    }
+    if (GIT_FILE_OPTIONS[option]) {
+      const value = inlineValue ?? arguments_[++index];
+      if (value && looksLikePath(value)) paths.push(value);
+      continue;
+    }
+    if (GIT_TEXT_OPTIONS[option]) {
+      if (inlineValue === undefined) index++;
+      continue;
+    }
+    if (argument.startsWith("-")) continue;
+    if (!subcommand) {
+      subcommand = argument;
+      continue;
+    }
+    if (afterSeparator || GIT_PATH_SUBCOMMANDS[subcommand] || /^(?:\/|\.\/|\.\.\/|~(?:\/|$))/.test(argument)) {
+      const path = gitPathspecPath(argument);
       if (path) paths.push(path);
     }
+  }
+  return paths;
+}
+
+const SSH_FILE_OPTIONS: Record<string, true> = {
+  "-i": true, "-F": true, "-E": true, "-S": true,
+};
+const SSH_VALUE_OPTIONS: Record<string, true> = {
+  "-B": true, "-b": true, "-c": true, "-D": true, "-I": true, "-J": true, "-L": true,
+  "-l": true, "-m": true, "-O": true, "-o": true, "-p": true, "-Q": true, "-R": true,
+  "-W": true, "-w": true,
+};
+const SSH_O_FILE_KEYS: Record<string, true> = {
+  certificatefile: true,
+  globalknownhostsfile: true,
+  identityfile: true,
+  revokedhostkeys: true,
+  userknownhostsfile: true,
+};
+
+function sshConfigPath(value: string): string | undefined {
+  const equals = value.indexOf("=");
+  if (equals < 0) return undefined;
+  const key = value.slice(0, equals).toLowerCase();
+  const path = value.slice(equals + 1);
+  return SSH_O_FILE_KEYS[key] && looksLikePath(path) ? path : undefined;
+}
+
+/** SSH operands after the destination are programs for the remote host, not local paths. */
+function sshPaths(arguments_: readonly string[]): string[] {
+  const paths: string[] = [];
+  for (let index = 0; index < arguments_.length; index++) {
+    const argument = arguments_[index]!;
+    if (SSH_FILE_OPTIONS[argument]) {
+      const value = arguments_[++index];
+      if (value && looksLikePath(value)) paths.push(value);
+      continue;
+    }
+    const attachedFile = /^(-[iFES])(.+)$/.exec(argument);
+    if (attachedFile?.[2] && looksLikePath(attachedFile[2])) {
+      paths.push(attachedFile[2]);
+      continue;
+    }
+    if (SSH_VALUE_OPTIONS[argument]) {
+      const value = arguments_[++index];
+      if (argument === "-o" && value) {
+        const path = sshConfigPath(value);
+        if (path) paths.push(path);
+      }
+      continue;
+    }
+    const attachedValue = /^(-[BbcdIJLlmOoPpQRWw])(.+)$/.exec(argument);
+    if (attachedValue) {
+      if (attachedValue[1] === "-o") {
+        const path = sshConfigPath(attachedValue[2]!);
+        if (path) paths.push(path);
+      }
+      continue;
+    }
+    if (!argument.startsWith("-")) break;
+  }
+  return paths;
+}
+
+const OMP_FILE_OPTIONS: Record<string, true> = {
+  "--config": true,
+  "--extension": true,
+  "-e": true,
+  "--plugin-dir": true,
+  "--cwd": true,
+};
+
+/** OMP model identifiers and prompts are data; only explicit config/code/workspace options are paths. */
+function ompPaths(arguments_: readonly string[]): string[] {
+  const paths: string[] = [];
+  for (let index = 0; index < arguments_.length; index++) {
+    const argument = arguments_[index]!;
+    const equals = argument.indexOf("=");
+    const option = equals > 0 ? argument.slice(0, equals) : argument;
+    if (!OMP_FILE_OPTIONS[option]) continue;
+    const value = equals > 0 ? argument.slice(equals + 1) : arguments_[++index];
+    if (value && looksLikePath(value)) paths.push(value);
   }
   return paths;
 }
@@ -876,16 +1104,24 @@ function commandPaths(unit: BashCommandUnit): string[] {
   if (unit.executable === "awk") return awkOperands(unit.arguments).paths;
   if (["grep", "rg", "ag", "ack"].includes(unit.executable)) return textSearchPaths(unit.arguments);
   if (unit.executable === "curl") return curlPaths(unit.arguments);
+  if (unit.executable === "git") return gitPaths(unit.arguments);
+  if (unit.executable === "ssh") return sshPaths(unit.arguments);
+  if (unit.executable === "omp") return ompPaths(unit.arguments);
+  if (unit.executable === "command" && unit.arguments[0] === "-v") return [];
+  if (DATA_ONLY_COMMANDS[unit.executable]) return [];
   const positional = unit.arguments.filter((word) => !word.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
   const optionValues = unit.arguments.flatMap((word) => {
     const match = /^--[^=]+=(.+)$/.exec(word);
     return match?.[1] && looksLikePath(match[1]) ? [match[1]] : [];
   });
   const candidates = [...positional, ...optionValues];
-  if (PATH_COMMANDS[unit.executable]) return candidates;
-  if (SEARCH_COMMANDS[unit.executable]) return candidates.filter(looksLikePath);
-  return candidates.filter(looksLikePath);
+  // Bare credential names are assessed; other bare names would need the
+  // command's own argument grammar, so only words with path structure qualify.
+  return candidates.filter((word) => word.includes("/")
+    ? looksLikePath(word)
+    : /^(?:\.\/|\.\.\/|~(?:\/|$))/.test(word) || isSensitiveBasename(word));
 }
+
 
 function lastCommand(node: Node): Node | undefined {
   if (node.type === "command") return node;
@@ -902,6 +1138,7 @@ function hasFilesystemRedirect(node: Node): boolean {
   for (let index = 0; index < node.childCount; index++) {
     const child = node.child(index);
     if (!child?.isNamed || !/redirect/.test(child.type)) continue;
+    if (/heredoc|here[_-]?string/i.test(child.type) || /^\d*<<<?/.test(child.text.trimStart())) continue;
     const destination = child.childForFieldName("destination");
     if (!destination || destination.type === "number" || destination.text === "-" || destination.text === "/dev/null") continue;
     return true;
@@ -925,7 +1162,9 @@ function walkCommands(
   if (node.type === "command") {
     const text = node.text.trim();
     const { executable, words } = commandParts(text);
-    const redirected = nextRedirectTargets.some((target) => target.startIndex === node.startIndex && target.endIndex === node.endIndex);
+    const redirected = nextRedirectTargets.some((target) =>
+      target.startIndex === node.startIndex && target.endIndex === node.endIndex
+    );
     units.push({
       text,
       executable,
@@ -941,10 +1180,14 @@ function walkCommands(
 }
 
 function collectRedirectPaths(node: Node, paths: string[]): void {
-  if (/redirect/.test(node.type)) {
-    const words = shellWords(node.text.replace(/^\d*[<>]+&?/, "").trim());
-    const candidate = words.at(-1);
-    if (candidate && !/^\d+$/.test(candidate) && candidate !== "-" && candidate !== "/dev/null") paths.push(candidate);
+  if (node.type !== "redirected_statement"
+    && /redirect/.test(node.type)
+    && !/heredoc|here[_-]?string/i.test(node.type)) {
+    const destination = node.childForFieldName("destination");
+    const candidate = destination ? shellWords(destination.text).at(-1) : undefined;
+    if (candidate && !/^\d+$/.test(candidate) && candidate !== "-" && candidate !== "/dev/null") {
+      paths.push(candidate);
+    }
   }
   for (let index = 0; index < node.childCount; index++) {
     const child = node.child(index);

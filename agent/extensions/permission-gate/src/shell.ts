@@ -1,12 +1,33 @@
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { Language, Parser, type Node } from "web-tree-sitter";
+import { LEVEL_ORDER, type PermissionLevel } from "./config";
+
+export interface CommandSafety {
+  reason: string;
+  /** Lowest autonomy level that no longer needs an approval for this form. */
+  minimumLevel?: PermissionLevel;
+  /** Whether a reusable session grant may be offered for this form. */
+  persistable: boolean;
+  /** Wrapper executable that hid the real command, when the floor came from indirection. */
+  indirection?: string;
+}
 
 export interface BashCommandUnit {
   text: string;
   executable?: string;
   arguments: string[];
-  forceAskReason?: string;
+  safety?: CommandSafety;
+}
+
+/** A floor without `minimumLevel` always asks; otherwise it asks below that level. */
+export function safetyRequiresApproval(
+  safety: CommandSafety | undefined,
+  level: PermissionLevel,
+): boolean {
+  if (!safety) return false;
+  if (!safety.minimumLevel) return true;
+  return LEVEL_ORDER.indexOf(level) < LEVEL_ORDER.indexOf(safety.minimumLevel);
 }
 
 export interface BashAnalysis {
@@ -96,6 +117,8 @@ interface CommandSafetyRule {
   shortFlags?: readonly string[];
   always?: true;
   unlessArguments?: readonly string[];
+  /** Bounded-mutation forms clear this floor at or above the named level. */
+  minimumLevel?: PermissionLevel;
 }
 
 /** Semantic floors for commands whose read/check form shares a prefix with a writing or executing form. */
@@ -261,6 +284,7 @@ const COMMAND_SAFETY: Readonly<Record<string, readonly CommandSafetyRule[]>> = {
   prettier: [{
     reason: "prettier write mode modifies workspace files",
     arguments: ["--write"],
+    minimumLevel: "medium",
   }],
   eslint: [{
     reason: "eslint fix or cache mode writes workspace files",
@@ -269,6 +293,7 @@ const COMMAND_SAFETY: Readonly<Record<string, readonly CommandSafetyRule[]>> = {
   biome: [{
     reason: "biome write or fix mode modifies workspace files",
     arguments: ["--write", "--fix"],
+    minimumLevel: "medium",
   }],
   oxlint: [{
     reason: "oxlint fix mode modifies workspace files",
@@ -605,38 +630,49 @@ function dockerComposeSubcommand(arguments_: readonly string[]): string | undefi
   return undefined;
 }
 
-function commandSafetyReason(executable: string, arguments_: readonly string[]): string | undefined {
-  if (SYSTEM_MUTATORS[executable]) return `${executable} changes machine or account state`;
+function alwaysAsk(reason: string): CommandSafety {
+  return { reason, persistable: false };
+}
+
+/** Semantic floor for one already-resolved executable and its arguments. */
+export function commandSafetyFor(
+  executable: string,
+  arguments_: readonly string[],
+): CommandSafety | undefined {
+  if (SYSTEM_MUTATORS[executable]) return alwaysAsk(`${executable} changes machine or account state`);
   if (executable === "git" && arguments_.includes("push")
     && (hasArgument(arguments_, "--force") || hasArgument(arguments_, "--force-with-lease")
       || hasArgument(arguments_, "--force-if-includes") || hasShortFlag(arguments_, "f"))) {
-    return "Forced git push can overwrite remote history";
+    return alwaysAsk("Forced git push can overwrite remote history");
   }
   if (executable === "git" && arguments_.includes("clean")
     && (hasArgument(arguments_, "--force") || hasShortFlag(arguments_, "f"))) {
-    return "Forced git clean permanently deletes untracked files";
+    return alwaysAsk("Forced git clean permanently deletes untracked files");
   }
   if (executable === "rm"
     && (hasArgument(arguments_, "--recursive") || hasShortFlag(arguments_, "r") || hasShortFlag(arguments_, "R"))
     && (hasArgument(arguments_, "--force") || hasShortFlag(arguments_, "f"))) {
-    return "Recursive forced deletion";
+    return alwaysAsk("Recursive forced deletion");
   }
   if ((executable === "chmod" || executable === "chown")
     && (hasArgument(arguments_, "--recursive") || hasShortFlag(arguments_, "R"))) {
-    return `Recursive ${executable} changes`;
+    return alwaysAsk(`Recursive ${executable} changes`);
   }
   if (executable === "sed" && sedOperands(arguments_).programs.some(sedScriptHasExternalEffect)) {
-    return "sed script can read, write, or execute outside the stdout transformation";
+    return alwaysAsk("sed script can read, write, or execute outside the stdout transformation");
   }
   if (executable === "awk" && awkOperands(arguments_).programs.some(awkScriptHasExternalEffect)) {
-    return "awk program can read, write, or execute outside its input stream";
+    return alwaysAsk("awk program can read, write, or execute outside its input stream");
   }
   if (executable === "docker" && arguments_[0] === "compose"
     && !["config", "ps"].includes(dockerComposeSubcommand(arguments_) ?? "")) {
-    return "Only docker compose config and ps are read-only at low autonomy";
+    return alwaysAsk("Only docker compose config and ps are read-only at low autonomy");
   }
   for (const rule of COMMAND_SAFETY[executable] ?? []) {
-    if (matchesSafetyRule(rule, arguments_)) return rule.reason;
+    if (!matchesSafetyRule(rule, arguments_)) continue;
+    return rule.minimumLevel
+      ? { reason: rule.reason, minimumLevel: rule.minimumLevel, persistable: true }
+      : alwaysAsk(rule.reason);
   }
   return undefined;
 }
@@ -650,18 +686,20 @@ function commandParts(text: string): { executable?: string; words: string[]; inl
   return { executable, words: words.slice(index), inlineEnvironment: index > 0 };
 }
 
-function commandForceAskReason(text: string, redirected: boolean, backgrounded: boolean): string | undefined {
+function commandSafety(text: string, redirected: boolean, backgrounded: boolean): CommandSafety | undefined {
   const { executable, words, inlineEnvironment } = commandParts(text);
-  if (!executable) return "Dynamic or empty command name";
-  if (/[$`]/.test(words[0] ?? "")) return "Dynamic command name";
-  if (inlineEnvironment) return "Inline environment variables can change command behavior";
-  if (redirected) return "Shell redirection";
-  if (backgrounded) return "Background execution";
-  if (ALWAYS_INDIRECT[executable]) return `Command indirection through ${executable}`;
-  if (SHELLS[executable] && words.slice(1).some((word) => /^-[^-]*c/.test(word))) {
-    return `Opaque shell program through ${executable} -c`;
+  if (!executable) return alwaysAsk("Dynamic or empty command name");
+  if (/[$`]/.test(words[0] ?? "")) return alwaysAsk("Dynamic command name");
+  if (inlineEnvironment) return alwaysAsk("Inline environment variables can change command behavior");
+  if (redirected) return alwaysAsk("Shell redirection");
+  if (backgrounded) return alwaysAsk("Background execution");
+  if (ALWAYS_INDIRECT[executable]) {
+    return { reason: `Command indirection through ${executable}`, persistable: false, indirection: executable };
   }
-  return commandSafetyReason(executable, words.slice(1));
+  if (SHELLS[executable] && words.slice(1).some((word) => /^-[^-]*c/.test(word))) {
+    return alwaysAsk(`Opaque shell program through ${executable} -c`);
+  }
+  return commandSafetyFor(executable, words.slice(1));
 }
 
 function catastrophicReason(command: string, units: BashCommandUnit[]): string | undefined {
@@ -771,7 +809,7 @@ function walkCommands(
       text,
       executable,
       arguments: words.slice(1),
-      forceAskReason: commandForceAskReason(text, redirected, nextBackgrounded),
+      safety: commandSafety(text, redirected, nextBackgrounded),
     });
   }
   for (let index = 0; index < node.childCount; index++) {

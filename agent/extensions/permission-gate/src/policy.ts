@@ -1,4 +1,4 @@
-import type { BashCommandUnit } from "./shell";
+import type { CommandIdentity } from "./command-identity";
 import { LEVEL_ORDER, type PermissionGateConfig, type PermissionLevel } from "./config";
 
 export type GatePolicy = "allow" | "ask" | "deny";
@@ -55,8 +55,9 @@ function lastMatch(value: string, patterns: readonly string[]): string | undefin
 export function resolveCommand(
   config: PermissionGateConfig,
   level: PermissionLevel,
-  command: string,
+  identity: CommandIdentity,
 ): GateDecision {
+  const command = identity.canonical;
   const blocked = lastMatch(command, config.commandBlocklist);
   if (blocked) {
     return { policy: "deny", reason: "Command blocklist", pattern: blocked, persistable: false };
@@ -98,17 +99,17 @@ const TWO_TOKEN_COMMANDS: Record<string, true> = {
 };
 
 /** Human command prefix stored for a session grant, following OpenCode's arity model. */
-export function commandGrantPattern(command: BashCommandUnit): string {
-  if (!command.executable) return command.text;
-  const tokens = [command.executable, ...command.arguments];
+export function commandGrantPattern(identity: CommandIdentity): string {
+  if (!identity.executable) return identity.canonical;
+  const tokens = [identity.executable, ...identity.arguments];
   const firstTwo = tokens.slice(0, 2).join(" ");
   const arity = THREE_TOKEN_PREFIXES[firstTwo]
     ? 3
-    : ONE_TOKEN_COMMANDS[command.executable]
+    : ONE_TOKEN_COMMANDS[identity.executable]
       ? 1
-      : THREE_TOKEN_COMMANDS[command.executable]
+      : THREE_TOKEN_COMMANDS[identity.executable]
         ? 3
-        : TWO_TOKEN_COMMANDS[command.executable]
+        : TWO_TOKEN_COMMANDS[identity.executable]
           ? 2
           : 1;
   return `${tokens.slice(0, Math.min(arity, tokens.length)).join(" ")} *`;

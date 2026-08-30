@@ -12,10 +12,11 @@ import {
   unregisterSession,
   type ApprovalItem,
 } from "./approvals";
+import { canonicalizeCommand, type CommandIdentity } from "./command-identity";
 import { LEVEL_ORDER, loadConfig, type PermissionGateConfig, type PermissionLevel } from "./config";
 import { assessPath, externalGrantPattern } from "./paths";
 import { commandGrantPattern, resolveCommand } from "./policy";
-import { analyzeBash, warmBashParser, type BashAnalysis } from "./shell";
+import { analyzeBash, safetyRequiresApproval, warmBashParser, type BashAnalysis } from "./shell";
 
 interface ExtensionTimeoutControl {
   testSetExtensionHandlerTimeoutMs(timeoutMs: number): void;
@@ -165,33 +166,43 @@ export default function permissionGate(pi: ExtensionAPI, agentDirectory: string 
       reasons.push("No executable command could be resolved");
     }
 
-    for (const command of analysis?.commands ?? []) {
-      const commandDecision = resolveCommand(config, level, command.text);
-      if (commandDecision.policy === "deny") return deny(commandDecision.reason, command.text);
-      const safetyReason = command.forceAskReason;
-      const commandPersistable = commandDecision.persistable && safetyReason === undefined;
-      const granted = commandPersistable && sessionAllows(ctx, "bash", command.text);
-      const asks = commandDecision.policy === "ask" || safetyReason !== undefined;
-      if (asks && !granted) {
-        needsApproval = true;
-        persistable &&= commandPersistable;
-        reasons.push(safetyReason ?? commandDecision.reason);
-        items.push({
-          label: command.text,
-          description: commandDecision.pattern,
-          value: command.text,
-          allowed: false,
-          ...(commandPersistable ? { rule: { surface: "bash", pattern: commandGrantPattern(command) } } : {}),
-        });
-      } else {
-        items.push({ label: command.text, value: command.text, allowed: true });
+    const identities: CommandIdentity[] = (analysis?.commands ?? []).map(canonicalizeCommand);
+    const seenItems = new Set<string>();
+    for (const identity of identities) {
+      const commandDecision = resolveCommand(config, level, identity);
+      if (commandDecision.policy === "deny") return deny(commandDecision.reason, identity.display);
+      bashPaths.push(...identity.paths);
+      const floorAsks = safetyRequiresApproval(identity.safety, level);
+      const commandPersistable = commandDecision.persistable && (identity.safety?.persistable ?? true);
+      const granted = commandPersistable && sessionAllows(ctx, "bash", identity.canonical);
+      const asks = commandDecision.policy === "ask" || floorAsks;
+      if (!asks || granted) {
+        items.push({ label: identity.display, value: identity.canonical, allowed: true });
+        continue;
       }
+      needsApproval = true;
+      persistable &&= commandPersistable;
+      reasons.push(floorAsks && identity.safety ? identity.safety.reason : commandDecision.reason);
+      const rule = commandPersistable
+        ? { surface: "bash", pattern: commandGrantPattern(identity) }
+        : undefined;
+      // One tool call must not raise the same decision twice.
+      const fingerprint = `${identity.canonical}\0${rule?.pattern ?? ""}`;
+      if (seenItems.has(fingerprint)) continue;
+      seenItems.add(fingerprint);
+      items.push({
+        label: identity.display,
+        description: commandDecision.pattern,
+        value: identity.canonical,
+        allowed: false,
+        ...(rule ? { rule } : {}),
+      });
     }
 
     const baseCwd = typeof input.cwd === "string" ? input.cwd : ctx.cwd;
-    const readOnlyPaths = analysis !== undefined && !analysis.malformed && analysis.commands.length > 0
-      && analysis.commands.every((command) =>
-        command.forceAskReason === undefined && resolveCommand(config, "low", command.text).policy === "allow"
+    const readOnlyPaths = analysis !== undefined && !analysis.malformed && identities.length > 0
+      && identities.every((identity) =>
+        !safetyRequiresApproval(identity.safety, "low") && resolveCommand(config, "low", identity).policy === "allow"
       );
     const pathAccess = readOnlyPaths ? "read" : "write";
     const paths = [...new Set(bashPaths)];

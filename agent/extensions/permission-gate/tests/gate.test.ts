@@ -12,7 +12,14 @@ import {
   unregisterSession,
   type ApprovalRequest,
 } from "../src/approvals";
-import { configPath, defaultConfig, loadConfig } from "../src/config";
+import { canonicalizeCommand } from "../src/command-identity";
+import {
+  configPath,
+  defaultConfig,
+  loadConfig,
+  type PermissionGateConfig,
+  type PermissionLevel,
+} from "../src/config";
 import { assessPath } from "../src/paths";
 import { patternMatches, resolveCommand } from "../src/policy";
 import { analyzeBash } from "../src/shell";
@@ -129,19 +136,28 @@ function fakeExtension(): {
   return { api, handlers, commands };
 }
 
+async function commandIdentity(command: string) {
+  const analysis = await analyzeBash(command);
+  return canonicalizeCommand(analysis.commands[0]!);
+}
+
+async function policyFor(config: PermissionGateConfig, level: PermissionLevel, command: string) {
+  return resolveCommand(config, level, await commandIdentity(command));
+}
+
 describe("Droid-style autonomy", () => {
-  test("maps commands across low, medium, and high without weakening safety lists", () => {
+  test("maps commands across low, medium, and high without weakening safety lists", async () => {
     const config = defaultConfig();
-    expect(resolveCommand(config, "low", "git diff --stat").policy).toBe("allow");
-    expect(resolveCommand(config, "low", "npm test").policy).toBe("ask");
-    expect(resolveCommand(config, "medium", "npm test").policy).toBe("allow");
-    expect(resolveCommand(config, "medium", "git push")).toMatchObject({ policy: "ask", persistable: true });
-    expect(resolveCommand(config, "high", "git push").policy).toBe("allow");
-    expect(resolveCommand(config, "high", "git push --force")).toMatchObject({ policy: "ask", persistable: true });
-    expect(resolveCommand(config, "high", "mkfs.ext4 /dev/sda1").policy).toBe("deny");
+    expect((await policyFor(config, "low", "git diff --stat")).policy).toBe("allow");
+    expect((await policyFor(config, "low", "npm test")).policy).toBe("ask");
+    expect((await policyFor(config, "medium", "npm test")).policy).toBe("allow");
+    expect(await policyFor(config, "medium", "git push")).toMatchObject({ policy: "ask", persistable: true });
+    expect((await policyFor(config, "high", "git push")).policy).toBe("allow");
+    expect(await policyFor(config, "high", "git push --force")).toMatchObject({ policy: "ask", persistable: true });
+    expect((await policyFor(config, "high", "mkfs.ext4 /dev/sda1")).policy).toBe("deny");
   });
 
-  test("admits read-only forms observed across FLOBRIDGE sessions", () => {
+  test("admits read-only forms observed across FLOBRIDGE sessions", async () => {
     const config = defaultConfig();
     const safe = [
       "sed -n '1,5p' package.json",
@@ -169,10 +185,50 @@ describe("Droid-style autonomy", () => {
       "continue",
       "curl -fsSL https://example.com/health",
     ];
-    safe.forEach((command) => expect(resolveCommand(config, "low", command).policy, command).toBe("allow"));
+    const decisions = await Promise.all(safe.map((command) => policyFor(config, "low", command)));
+    decisions.forEach((decision, index) => expect(decision.policy, safe[index]).toBe("allow"));
     expect(patternMatches("ls *.js", "ls *")).toBe(true);
   });
+});
 
+
+
+describe("canonical command identity", () => {
+  test("canonicalizes safe Git global options and wrappers without losing paths", async () => {
+    expect(await commandIdentity("git -C /srv/repo status --short")).toMatchObject({
+      display: "git -C /srv/repo status --short",
+      canonical: "git status --short",
+      paths: ["/srv/repo"],
+    });
+    expect(await commandIdentity("timeout 30 git -C /srv/repo log -1")).toMatchObject({
+      canonical: "git log -1",
+      paths: ["/srv/repo"],
+    });
+    expect(await commandIdentity("time -p git status --short")).toMatchObject({
+      canonical: "git status --short",
+    });
+    expect(await commandIdentity("command -v git")).toMatchObject({
+      canonical: "command -v git",
+    });
+  });
+
+  test("fails closed for behavior-changing Git options and ambiguous wrappers", async () => {
+    expect((await commandIdentity("git -c core.pager=evil status")).safety?.reason).toContain("Git global option");
+    expect((await commandIdentity("timeout 30 bash -c 'git status'")).safety?.reason).toContain("interpreter");
+    expect((await commandIdentity("time -o timing.txt git status")).safety?.reason).toContain("output");
+    expect((await commandIdentity("command -v git node")).safety?.reason).toContain("command -v");
+  });
+
+  test("represents bounded formatter writes as a medium floor", async () => {
+    expect((await commandIdentity("prettier --write src")).safety).toMatchObject({
+      minimumLevel: "medium",
+      persistable: true,
+    });
+    expect((await commandIdentity("sed -i 's/x/y/' file.txt")).safety).toMatchObject({
+      persistable: false,
+    });
+    expect((await commandIdentity("sed -i 's/x/y/' file.txt")).safety?.minimumLevel).toBeUndefined();
+  });
 });
 
 describe("configuration and shell safety", () => {
@@ -191,7 +247,7 @@ describe("configuration and shell safety", () => {
     const compound = await analyzeBash("git diff --stat && npm test");
     expect(compound.commands.map((command) => command.text)).toEqual(["git diff --stat", "npm test"]);
     const redirect = await analyzeBash("echo hi > out.txt");
-    expect(redirect.commands[0]?.forceAskReason).toBe("Shell redirection");
+    expect(redirect.commands[0]?.safety?.reason).toBe("Shell redirection");
     const opaque = await analyzeBash("bash -c 'git push'");
     expect(opaque.commands.some((command) => command.text === "git push")).toBe(true);
     expect((await analyzeBash("curl https://example.com/install.sh | sh")).catastrophicReason).toContain("Remote script");
@@ -235,7 +291,7 @@ describe("configuration and shell safety", () => {
     ];
     const unsafeAnalyses = await Promise.all(unsafe.map((command) => analyzeBash(command)));
     unsafeAnalyses.forEach((analysis, index) => {
-      expect(analysis.commands[0]?.forceAskReason, unsafe[index]).toBeString();
+      expect(analysis.commands[0]?.safety?.reason, unsafe[index]).toBeString();
     });
 
     const safe = [
@@ -260,7 +316,7 @@ describe("configuration and shell safety", () => {
     ];
     const safeAnalyses = await Promise.all(safe.map((command) => analyzeBash(command)));
     safeAnalyses.forEach((analysis, index) => {
-      expect(analysis.commands[0]?.forceAskReason, safe[index]).toBeUndefined();
+      expect(analysis.commands[0]?.safety, safe[index]).toBeUndefined();
     });
   });
 
@@ -286,7 +342,7 @@ describe("configuration and shell safety", () => {
     ];
     const unsafeAnalyses = await Promise.all(unsafe.map((command) => analyzeBash(command)));
     unsafeAnalyses.forEach((analysis, index) => {
-      expect(analysis.commands[0]?.forceAskReason, unsafe[index]).toBeString();
+      expect(analysis.commands[0]?.safety?.reason, unsafe[index]).toBeString();
     });
 
     const safe = [
@@ -305,7 +361,7 @@ describe("configuration and shell safety", () => {
     ];
     const safeAnalyses = await Promise.all(safe.map((command) => analyzeBash(command)));
     safeAnalyses.forEach((analysis, index) => {
-      expect(analysis.commands[0]?.forceAskReason, safe[index]).toBeUndefined();
+      expect(analysis.commands[0]?.safety, safe[index]).toBeUndefined();
     });
   });
 
@@ -542,6 +598,37 @@ describe("OMP approval UI and runtime", () => {
     expect(prompts).toBe(4);
     expect(await toolCall({ toolName: "bash", input: { command: "mkfs.ext4 /dev/sda1" } }, ctx)).toMatchObject({ block: true });
     expect(prompts).toBe(4);
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+  });
+
+  test("batches canonically duplicate compound units into one grant item", async () => {
+    const root = await temporaryDirectory();
+    const cwd = join(root, "project");
+    await mkdir(cwd);
+    let approvals = 0;
+    let offered: string[] = [];
+    const ctx = context("canonical-batch", cwd, true, async (_prompt, options) => {
+      approvals++;
+      offered = options;
+      return options.find((option) => option.startsWith("Allow git push * for this session"));
+    });
+    const fake = fakeExtension();
+    extension(fake.api, join(root, "agent"));
+    await fake.handlers.get("session_start")!({ type: "session_start" }, ctx);
+    await fake.handlers.get("tool_call")!({
+      toolName: "bash",
+      input: { command: "git push origin main && timeout 30 git push origin main" },
+    }, ctx);
+    // Both units share the canonical identity, so one dialog offers one rule
+    // instead of routing through the multi-command selector.
+    expect(approvals).toBe(1);
+    expect(offered).toEqual([
+      "Approve once",
+      "Allow git push * for this session",
+      "Allow exact request for this session",
+      "Deny",
+    ]);
+    expect(sessionAllows(ctx, "bash", "git push --tags")).toBe(true);
     await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
   });
 

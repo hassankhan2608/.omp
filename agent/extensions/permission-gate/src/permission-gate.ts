@@ -69,7 +69,9 @@ export default function permissionGate(pi: ExtensionAPI, agentDirectory: string 
   };
 
   pi.registerCommand("permission", {
-    description: "Switch Permission Gate autonomy (low, medium, high)",
+    // OMP renders one shared icon for every extension command, so the shield
+    // leads the description to mark this row specifically.
+    description: `${LEVEL_ICON} Switch Permission Gate autonomy (low, medium, high)`,
     getArgumentCompletions: (argumentPrefix) => {
       const prefix = argumentPrefix.trim().toLowerCase();
       return LEVEL_ORDER

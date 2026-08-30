@@ -19,10 +19,6 @@ import { commandGrantPattern, resolveCommand } from "./policy";
 import { analyzeBash, safetyRequiresApproval, warmBashParser, type BashAnalysis } from "./shell";
 import { extractToolPaths, type GatedPathTool } from "./tool-paths";
 
-interface ExtensionTimeoutControl {
-  testSetExtensionHandlerTimeoutMs(timeoutMs: number): void;
-}
-
 interface RuntimeState {
   config?: PermissionGateConfig;
   error?: Error;
@@ -32,10 +28,24 @@ const EXTENSION_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_AGENT_DIR = dirname(dirname(EXTENSION_DIR));
 const SCHEMA_URL = pathToFileURL(join(EXTENSION_DIR, "config.schema.json")).href;
 const STATUS_KEY = "permission-gate-level";
-const INTERACTIVE_APPROVAL_TIMEOUT_MS = 2_147_483_647;
+const PERMISSION_USAGE = "Usage: /permission [low|medium|high]";
+/** One stable shield for every level; OMP sanitizes styling out of status text. */
+const LEVEL_ICON = "󰒃";
+const LEVEL_DESCRIPTIONS: Record<PermissionLevel, string> = {
+  low: "File edits and known low-risk/read-only commands",
+  medium: "Reversible workspace changes, installs, builds, tests, and local Git",
+  high: "All commands except blocklist and explicit high-level denylist asks",
+};
 
 function showLevel(ctx: ExtensionContext, level: PermissionLevel): void {
-  if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, `perm:${level}`);
+  if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, `${LEVEL_ICON} perm:${level}`);
+}
+
+/** Single write path so direct and interactive changes cannot diverge. */
+function applyLevel(ctx: ExtensionContext, level: PermissionLevel): void {
+  setLevel(ctx, level);
+  showLevel(ctx, level);
+  if (ctx.hasUI) ctx.ui.notify(`Permission Gate: ${level}`, "info");
 }
 
 function principal(ctx: ExtensionContext): string {
@@ -47,8 +57,6 @@ function deny(reason: string, value: string): { block: true; reason: string } {
 }
 
 export default function permissionGate(pi: ExtensionAPI, agentDirectory: string = DEFAULT_AGENT_DIR): void {
-  const timeoutControl = pi.pi as typeof pi.pi & ExtensionTimeoutControl;
-  timeoutControl.testSetExtensionHandlerTimeoutMs(INTERACTIVE_APPROVAL_TIMEOUT_MS);
   pi.setLabel("Permission Gate");
 
   let runtimePromise: Promise<RuntimeState> | undefined;
@@ -60,19 +68,31 @@ export default function permissionGate(pi: ExtensionAPI, agentDirectory: string 
     return runtimePromise;
   };
 
-  pi.registerCommand("permissions", {
+  pi.registerCommand("permission", {
     description: "Switch Permission Gate autonomy (low, medium, high)",
-    handler: async (_args, ctx) => {
+    getArgumentCompletions: (argumentPrefix) => {
+      const prefix = argumentPrefix.trim().toLowerCase();
+      return LEVEL_ORDER
+        .filter((level) => level.startsWith(prefix))
+        .map((level) => ({ value: level, label: level, description: LEVEL_DESCRIPTIONS[level] }));
+    },
+    handler: async (args, ctx) => {
       const runtime = await initialize();
       if (!runtime.config || !ctx.hasUI) return;
+      const requested = args.trim().toLowerCase();
+      if (requested.length > 0) {
+        const direct = LEVEL_ORDER.find((level) => level === requested);
+        if (!direct) {
+          ctx.ui.notify(PERMISSION_USAGE, "error");
+          return;
+        }
+        applyLevel(ctx, direct);
+        return;
+      }
       const active = currentLevel(ctx, runtime.config.defaultLevel);
       const options = LEVEL_ORDER.map((level) => ({
         label: level === active ? `${level} (active)` : level,
-        description: level === "low"
-          ? "File edits and known low-risk/read-only commands"
-          : level === "medium"
-            ? "Reversible workspace changes, installs, builds, tests, and local Git"
-            : "All commands except blocklist and explicit high-level denylist asks",
+        description: LEVEL_DESCRIPTIONS[level],
       }));
       const choice = await selectCompactOption(ctx.ui, {
         title: "Permission Gate",
@@ -84,10 +104,7 @@ export default function permissionGate(pi: ExtensionAPI, agentDirectory: string 
       });
       if (choice === undefined) return;
       const selected = LEVEL_ORDER.find((level) => choice.startsWith(level));
-      if (!selected) return;
-      setLevel(ctx, selected);
-      showLevel(ctx, selected);
-      ctx.ui.notify(`Permission Gate: ${selected}`, "info");
+      if (selected) applyLevel(ctx, selected);
     },
   });
 

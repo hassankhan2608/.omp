@@ -43,15 +43,33 @@ async function temporaryDirectory(): Promise<string> {
 
 type SelectMock = (prompt: string, options: string[]) => Promise<string | undefined>;
 
+interface UiTrace {
+  statuses: Array<[string, string | undefined]>;
+  notifications: Array<[string, string]>;
+}
+
+const uiTraces = new WeakMap<ExtensionContext, UiTrace>();
+
+function traceOf(ctx: ExtensionContext): UiTrace {
+  const trace = uiTraces.get(ctx);
+  if (!trace) throw new Error("context was not created by the test helper");
+  return trace;
+}
+
 function context(id: string, cwd: string, hasUI: boolean, select?: SelectMock): ExtensionContext {
-  return {
+  const trace: UiTrace = { statuses: [], notifications: [] };
+  const ctx = {
     cwd,
     hasUI,
     getSystemPrompt: () => [],
     sessionManager: { getSessionId: () => id },
     ui: {
-      notify: () => undefined,
-      setStatus: () => undefined,
+      notify: (message: string, kind: string) => {
+        trace.notifications.push([message, kind]);
+      },
+      setStatus: (key: string, value: string | undefined) => {
+        trace.statuses.push([key, value]);
+      },
       select: async (prompt: string, options: unknown[]) => select?.(
         prompt,
         options.map((option) => typeof option === "string"
@@ -62,6 +80,8 @@ function context(id: string, cwd: string, hasUI: boolean, select?: SelectMock): 
       ),
     },
   } as unknown as ExtensionContext;
+  uiTraces.set(ctx, trace);
+  return ctx;
 }
 
 type PanelComponent = {
@@ -162,18 +182,28 @@ async function waitForDialogs(dialogs: readonly QueuedDialog[], count: number): 
 
 type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
 
+interface FakeCommand {
+  handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+  getArgumentCompletions?: (argumentPrefix: string) => Array<{
+    value: string;
+    label: string;
+    description?: string;
+  }> | null;
+}
+
 function fakeExtension(): {
   api: ExtensionAPI;
   handlers: Map<string, ExtensionHandler>;
-  commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>;
+  commands: Map<string, FakeCommand>;
 } {
   const handlers = new Map<string, ExtensionHandler>();
-  const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
+  const commands = new Map<string, FakeCommand>();
   const api = {
-    pi: { testSetExtensionHandlerTimeoutMs: () => undefined },
+    // No test-only timeout seam: the queue wait is host configuration now.
+    pi: {},
     setLabel: () => undefined,
     on: (event: string, handler: ExtensionHandler) => handlers.set(event, handler),
-    registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+    registerCommand: (name: string, options: FakeCommand) => {
       commands.set(name, options);
     },
   } as unknown as ExtensionAPI;
@@ -704,7 +734,7 @@ describe("OMP approval UI and runtime", () => {
     unregisterSession(ctx);
   });
 
-  test("uses the same compact full-width panel for the permissions command", async () => {
+  test("uses the same compact full-width panel for the permission command", async () => {
     const root = await temporaryDirectory();
     const agentDirectory = join(root, "agent");
     const cwd = join(root, "project");
@@ -715,7 +745,8 @@ describe("OMP approval UI and runtime", () => {
     extension(fake.api, agentDirectory);
 
     await fake.handlers.get("session_start")!({ type: "session_start" }, ctx);
-    await fake.commands.get("permissions")!.handler("", ctx);
+    expect(fake.commands.has("permissions")).toBe(false);
+    await fake.commands.get("permission")!.handler("", ctx);
 
     const rendered = captured.lines;
     const panel = rendered.join("\n");
@@ -728,6 +759,43 @@ describe("OMP approval UI and runtime", () => {
     expect(rendered).toHaveLength(7);
     expect(currentLevel(ctx, "low")).toBe("medium");
     await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+  });
+
+  test("switches levels directly, completes arguments, and rejects bad input", async () => {
+    const root = await temporaryDirectory();
+    const cwd = join(root, "project");
+    await mkdir(cwd);
+    const ctx = context("permission-direct", cwd, true);
+    const trace = traceOf(ctx);
+    const fake = fakeExtension();
+    extension(fake.api, join(root, "agent"));
+    await fake.handlers.get("session_start")!({ type: "session_start" }, ctx);
+    const command = fake.commands.get("permission")!;
+
+    expect(trace.statuses.at(-1)).toEqual(["permission-gate-level", "󰒃 perm:low"]);
+    expect(command.getArgumentCompletions?.("m")).toEqual([{
+      value: "medium",
+      label: "medium",
+      description: "Reversible workspace changes, installs, builds, tests, and local Git",
+    }]);
+    expect(command.getArgumentCompletions?.("")).toHaveLength(3);
+    expect(command.getArgumentCompletions?.("zzz")).toEqual([]);
+
+    await command.handler(" MEDIUM ", ctx);
+    expect(currentLevel(ctx, "low")).toBe("medium");
+    expect(trace.statuses.at(-1)).toEqual(["permission-gate-level", "󰒃 perm:medium"]);
+    expect(trace.notifications.at(-1)).toEqual(["Permission Gate: medium", "info"]);
+
+    await command.handler("high extra", ctx);
+    expect(currentLevel(ctx, "low")).toBe("medium");
+    expect(trace.notifications.at(-1)).toEqual(["Usage: /permission [low|medium|high]", "error"]);
+
+    await command.handler("nonsense", ctx);
+    expect(currentLevel(ctx, "low")).toBe("medium");
+    expect(trace.notifications.at(-1)).toEqual(["Usage: /permission [low|medium|high]", "error"]);
+
+    await fake.handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
+    expect(trace.statuses.at(-1)).toEqual(["permission-gate-level", undefined]);
   });
 
   test("forwards headless asks and never offers persistence for safety floors", async () => {
@@ -800,7 +868,7 @@ describe("OMP approval UI and runtime", () => {
     expect(prompts).toBe(0);
     expect(await toolCall({ toolName: "bash", input: { command: "npm test" } }, ctx)).toBeUndefined();
     expect(prompts).toBe(1);
-    await fake.commands.get("permissions")!.handler("", ctx);
+    await fake.commands.get("permission")!.handler("", ctx);
     expect(await toolCall({ toolName: "bash", input: { command: "npm test" } }, ctx)).toBeUndefined();
     expect(prompts).toBe(1);
     expect(await toolCall({ toolName: "bash", input: { command: "git push origin main" } }, ctx)).toBeUndefined();

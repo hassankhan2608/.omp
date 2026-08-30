@@ -27,6 +27,8 @@ Current defects:
 
 - Show serialized approval-queue progress as a stable top-right counter when more than one approval is pending.
 - Show the active autonomy level with one stable permission icon and plain uncolored text in OMP's status line.
+- Provide one `/permission` command with interactive and direct low/medium/high modes.
+
 
 
 ## Non-goals
@@ -186,12 +188,35 @@ Requirements:
 - Use the same `󰒃` icon for all three levels.
 - Do not emit ANSI escapes, theme colors, or colored emoji.
 - Keep the explicit `perm:` prefix so the segment remains understandable without memorizing the icon.
-- Update the status immediately after session start and after every successful `/permissions` level change.
+- Update the status immediately after session start and after every successful `/permission` level change.
 - Clear the same status key during session shutdown according to existing extension lifecycle behavior.
 - Treat the icon and text as one compact segment; do not add separate status rows or replace OMP's footer.
 - Verify display width with OMP's status sanitizer and the configured Nerd Font symbol preset.
 
-### 8. Prompt queue timeout
+### 8. Permission command interface
+
+Rename the existing plural slash command to singular `/permission` as a clean cutover. Do not register `/permissions` as an alias.
+
+Supported forms:
+
+```text
+/permission
+/permission low
+/permission medium
+/permission high
+```
+
+Behavior:
+
+- No argument opens the existing interactive low/medium/high selector with the active level selected.
+- One valid level argument changes immediately without opening the selector, updates the status segment, and shows the existing informational notification.
+- Trim outer whitespace and match level arguments case-insensitively.
+- Empty tokens, unknown levels, or extra arguments do not change state and show `Usage: /permission [low|medium|high]` as an error notification.
+- `getArgumentCompletions` offers `low`, `medium`, and `high`, filtered case-insensitively by the current argument prefix and accompanied by the same level descriptions used in the interactive selector.
+- Direct and interactive changes call the same level-update function so grant scope, status updates, and notifications cannot diverge.
+
+### 9. Prompt queue timeout
+
 
 
 
@@ -204,7 +229,7 @@ extensionHandlers:
 
 Permission Gate continues to serialize visible prompts. Ten minutes applies to the total extension handler wait, including time queued behind another prompt. A timeout still denies/fails closed; it never auto-approves.
 
-### 9. Tier policy additions
+### 10. Tier policy additions
 
 #### Low: read-only and non-mutating
 
@@ -279,7 +304,7 @@ interface ApprovalQueueProgress {
 
 These interfaces are conceptual contracts; implementation names may follow existing project conventions, but each representation and scope must remain distinct.
 
-Existing public slash-command behavior and configuration keys remain compatible except for the new supported timeout setting. Existing session grants need no migration because grants are in-memory and session-scoped.
+The `/permission` rename is an intentional clean cutover; `/permissions` is removed. Other slash-command behavior and configuration keys remain compatible except for the new supported timeout setting. Existing session grants need no migration because grants are in-memory and session-scoped.
 
 ## Error handling and security invariants
 
@@ -310,8 +335,10 @@ Existing public slash-command behavior and configuration keys remain compatible 
 - Header rendering at normal and narrow terminal widths: right alignment, no body overlap, one consistent accent style, and correct visible-width accounting.
 - Fallback `ui.select` title formatting when the custom renderer is unavailable.
 - Exact status mappings for low, medium, and high: `󰒃 perm:low`, `󰒃 perm:medium`, and `󰒃 perm:high`.
-- Status updates on session start and `/permissions` transitions, plus cleanup on session shutdown.
+- Status updates on session start and direct or interactive `/permission` transitions, plus cleanup on session shutdown.
 - Sanitized status output and visible-width accounting prove the Nerd Font shield survives without ANSI sequences or footer misalignment.
+- `/permission` with no arguments opens the existing selector; direct low/medium/high arguments bypass it and use the same state-update path.
+- Argument completion filters all three levels case-insensitively; invalid or extra arguments preserve the active level and report exact usage.
 - Supported 600,000 ms extension-handler timeout configuration.
 - Every new low/medium pattern has a mutating or ambiguous negative case.
 
@@ -328,25 +355,28 @@ Record before/after ask counts for low, medium, and high. Acceptance requires:
 
 ### Live OMP smoke test
 
-1. Start a fresh OMP session at low autonomy.
-2. Confirm the footer shows `󰒃 perm:low`; switch through medium and high and confirm the same icon remains while only the level text changes.
-3. Approve one external directory.
-4. Exercise the exact root and a descendant through Bash, edit, and write; observe no repeat prompt.
-5. Start two subagents using the same approved scope; observe no sibling repeat prompt.
-6. Run a compound safe-wrapper and `git -C` command; observe no more than one prompt.
-7. While the first of three serialized subagent approvals is visible, observe `1/3` at the extreme right; then observe `2/3` and `3/3` as the queue advances without covering body text.
-8. Enqueue another approval while the first dialog is open and confirm the denominator updates without reopening the dialog.
-9. Queue subagent requests behind a visible prompt for longer than 30 seconds; observe no timeout and no auto-approval.
-10. Start a new OMP session and confirm the external directory asks again and a single request shows no counter.
+1. Start a fresh OMP session at low autonomy and confirm the footer shows `󰒃 perm:low`.
+2. Run `/permission medium`; confirm no picker opens and the footer immediately shows `󰒃 perm:medium`.
+3. Run `/permission`, choose high interactively, and confirm the footer shows `󰒃 perm:high`.
+4. Run an invalid direct form and confirm the level remains high with the exact usage error.
+5. Approve one external directory.
+6. Exercise the exact root and a descendant through Bash, edit, and write; observe no repeat prompt.
+7. Start two subagents using the same approved scope; observe no sibling repeat prompt.
+8. Run a compound safe-wrapper and `git -C` command; observe no more than one prompt.
+9. While the first of three serialized subagent approvals is visible, observe `1/3` at the extreme right; then observe `2/3` and `3/3` as the queue advances without covering body text.
+10. Enqueue another approval while the first dialog is open and confirm the denominator updates without reopening the dialog.
+11. Queue subagent requests behind a visible prompt for longer than 30 seconds; observe no timeout and no auto-approval.
+12. Start a new OMP session and confirm the external directory asks again and a single request shows no counter.
 
 ## Rollout
 
 1. Land canonical identity and tests without broad policy additions.
 2. Land parent-session and path-grant semantics together with reactive queue accounting and the top-right progress chip.
-3. Add edit/write interception and timeout configuration.
-4. Add low and medium tier patterns with negative tests.
-5. Replay the corpus and run live OMP smoke tests.
-6. Remove obsolete raw-text grant paths and the test-only timeout seam in the same clean cutover; no compatibility alias remains.
+3. Land the `/permission` clean cutover and stable status icon.
+4. Add edit/write interception and timeout configuration.
+5. Add low and medium tier patterns with negative tests.
+6. Replay the corpus and run live OMP smoke tests.
+7. Remove obsolete raw-text grant paths and the test-only timeout seam in the same clean cutover; no compatibility alias remains.
 
 ## Acceptance criteria
 
@@ -355,6 +385,7 @@ Record before/after ask counts for low, medium, and high. Acceptance requires:
 - The same grant does not survive a new OMP session.
 - `git -C` and safe wrappers inherit underlying policy without generating broad wrapper grants.
 - Queued subagents do not fail at 30 seconds while waiting for approval.
+- `/permission` supports both interactive selection and direct low/medium/high changes with completion and fail-safe invalid-argument handling; `/permissions` is absent.
 - Multiple serialized approvals show a right-aligned, consistently styled `current/total` counter that updates as the queue changes, never overlaps dialog content, and disappears for a single request.
 - The status line uses the same uncolored `󰒃` icon for low, medium, and high and updates the explicit `perm:<level>` text immediately.
 - Low/medium ask counts decrease against the recorded corpus without weakening hard denies.

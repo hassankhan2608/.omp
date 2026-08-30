@@ -26,6 +26,8 @@ Current defects:
 - Keep all grants session-only; a new OMP session starts without prior grants.
 
 - Show serialized approval-queue progress as a stable top-right counter when more than one approval is pending.
+- Show the active autonomy level with one stable permission icon and plain uncolored text in OMP's status line.
+
 
 ## Non-goals
 
@@ -169,7 +171,28 @@ Rendering rules:
 - At narrow widths, keep the counter at the right edge and omit or truncate the left `Permission Gate` chip before dropping the counter.
 - The non-custom `ui.select` fallback appends `[current/total]` to its title because it cannot right-align border content.
 
-### 7. Prompt queue timeout
+### 7. Permission status indicator
+
+Permission Gate reports the current autonomy level through the existing `setStatus` slot using one stable shield icon:
+
+```text
+󰒃 perm:low
+󰒃 perm:medium
+󰒃 perm:high
+```
+
+Requirements:
+
+- Use the same `󰒃` icon for all three levels.
+- Do not emit ANSI escapes, theme colors, or colored emoji.
+- Keep the explicit `perm:` prefix so the segment remains understandable without memorizing the icon.
+- Update the status immediately after session start and after every successful `/permissions` level change.
+- Clear the same status key during session shutdown according to existing extension lifecycle behavior.
+- Treat the icon and text as one compact segment; do not add separate status rows or replace OMP's footer.
+- Verify display width with OMP's status sanitizer and the configured Nerd Font symbol preset.
+
+### 8. Prompt queue timeout
+
 
 
 Replace the test-only module-global timeout seam with OMP's supported extension configuration:
@@ -181,7 +204,7 @@ extensionHandlers:
 
 Permission Gate continues to serialize visible prompts. Ten minutes applies to the total extension handler wait, including time queued behind another prompt. A timeout still denies/fails closed; it never auto-approves.
 
-### 8. Tier policy additions
+### 9. Tier policy additions
 
 #### Low: read-only and non-mutating
 
@@ -286,6 +309,9 @@ Existing public slash-command behavior and configuration keys remain compatible 
 - Queue-total recomputation when a waiting request becomes covered, denial/cancellation cleanup, and reset after the queue drains.
 - Header rendering at normal and narrow terminal widths: right alignment, no body overlap, one consistent accent style, and correct visible-width accounting.
 - Fallback `ui.select` title formatting when the custom renderer is unavailable.
+- Exact status mappings for low, medium, and high: `󰒃 perm:low`, `󰒃 perm:medium`, and `󰒃 perm:high`.
+- Status updates on session start and `/permissions` transitions, plus cleanup on session shutdown.
+- Sanitized status output and visible-width accounting prove the Nerd Font shield survives without ANSI sequences or footer misalignment.
 - Supported 600,000 ms extension-handler timeout configuration.
 - Every new low/medium pattern has a mutating or ambiguous negative case.
 
@@ -303,14 +329,15 @@ Record before/after ask counts for low, medium, and high. Acceptance requires:
 ### Live OMP smoke test
 
 1. Start a fresh OMP session at low autonomy.
-2. Approve one external directory.
-3. Exercise the exact root and a descendant through Bash, edit, and write; observe no repeat prompt.
-4. Start two subagents using the same approved scope; observe no sibling repeat prompt.
-5. Run a compound safe-wrapper and `git -C` command; observe no more than one prompt.
-6. While the first of three serialized subagent approvals is visible, observe `1/3` at the extreme right; then observe `2/3` and `3/3` as the queue advances without covering body text.
-7. Enqueue another approval while the first dialog is open and confirm the denominator updates without reopening the dialog.
-8. Queue subagent requests behind a visible prompt for longer than 30 seconds; observe no timeout and no auto-approval.
-9. Start a new OMP session and confirm the external directory asks again and a single request shows no counter.
+2. Confirm the footer shows `󰒃 perm:low`; switch through medium and high and confirm the same icon remains while only the level text changes.
+3. Approve one external directory.
+4. Exercise the exact root and a descendant through Bash, edit, and write; observe no repeat prompt.
+5. Start two subagents using the same approved scope; observe no sibling repeat prompt.
+6. Run a compound safe-wrapper and `git -C` command; observe no more than one prompt.
+7. While the first of three serialized subagent approvals is visible, observe `1/3` at the extreme right; then observe `2/3` and `3/3` as the queue advances without covering body text.
+8. Enqueue another approval while the first dialog is open and confirm the denominator updates without reopening the dialog.
+9. Queue subagent requests behind a visible prompt for longer than 30 seconds; observe no timeout and no auto-approval.
+10. Start a new OMP session and confirm the external directory asks again and a single request shows no counter.
 
 ## Rollout
 
@@ -329,4 +356,5 @@ Record before/after ask counts for low, medium, and high. Acceptance requires:
 - `git -C` and safe wrappers inherit underlying policy without generating broad wrapper grants.
 - Queued subagents do not fail at 30 seconds while waiting for approval.
 - Multiple serialized approvals show a right-aligned, consistently styled `current/total` counter that updates as the queue changes, never overlaps dialog content, and disappears for a single request.
+- The status line uses the same uncolored `󰒃` icon for low, medium, and high and updates the explicit `perm:<level>` text immediately.
 - Low/medium ask counts decrease against the recorded corpus without weakening hard denies.

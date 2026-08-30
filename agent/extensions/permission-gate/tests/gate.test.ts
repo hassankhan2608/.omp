@@ -14,6 +14,7 @@ import {
   sessionAllows,
   unregisterSession,
   type ApprovalRequest,
+  type ApprovalResult,
 } from "../src/approvals";
 import { canonicalizeCommand } from "../src/command-identity";
 import {
@@ -118,6 +119,45 @@ function captureCustomUi(ctx: ExtensionContext, inputs: readonly string[] = ["\n
       return rendered;
     },
   };
+}
+
+interface QueuedDialog {
+  latest(): string;
+  release(choice: string | undefined): void;
+}
+
+/** Hold each approval dialog open so several requests can queue concurrently. */
+function captureQueuedUi(ctx: ExtensionContext): { readonly dialogs: readonly QueuedDialog[] } {
+  const dialogs: QueuedDialog[] = [];
+  const ui = ctx.ui as unknown as { custom(factory: PanelFactory): Promise<string | undefined> };
+  ui.custom = async (factory) => {
+    const { promise, resolve } = Promise.withResolvers<string | undefined>();
+    let component: PanelComponent | undefined;
+    let frames = "";
+    const redraw = () => {
+      frames = component ? component.render(120).join("\n") : frames;
+    };
+    component = await factory(
+      { requestRender: redraw },
+      {
+        fg: (color, text) => `<fg:${color}>${text}</fg>`,
+        bg: (color, text) => `<bg:${color}>${text}</bg>`,
+        bold: (text) => `<bold>${text}</bold>`,
+      },
+      { matches: () => false },
+      resolve,
+    );
+    redraw();
+    dialogs.push({ latest: () => frames, release: resolve });
+    return promise;
+  };
+  return { dialogs };
+}
+
+/** Advance queued microtasks until the expected dialog count is reached. */
+async function waitForDialogs(dialogs: readonly QueuedDialog[], count: number): Promise<void> {
+  for (let attempt = 0; attempt < 500 && dialogs.length < count; attempt++) await Promise.resolve();
+  expect(dialogs).toHaveLength(count);
 }
 
 type ExtensionHandler = (event: Record<string, unknown>, ctx: ExtensionContext) => Promise<unknown>;
@@ -424,6 +464,129 @@ describe("configuration and shell safety", () => {
 });
 
 describe("OMP approval UI and runtime", () => {
+  test("renders reactive right-aligned queue progress and resets after drain", async () => {
+    const cwd = await temporaryDirectory();
+    const ctx = context("queue-progress", cwd, true);
+    const captured = captureQueuedUi(ctx);
+    registerSession(ctx, "low");
+
+    const ask = (key: string, pattern: string) => requestApproval(ctx, {
+      key,
+      title: "Allow bash?",
+      description: "Command exceeds low autonomy",
+      preview: key,
+      principal: "main",
+      items: [{ label: key, value: key, allowed: false, rule: { surface: "bash", pattern } }],
+    });
+
+    const first = ask("alpha", "alpha *");
+    await waitForDialogs(captured.dialogs, 1);
+    const second = ask("bravo", "bravo *");
+    const third = ask("charlie", "charlie *");
+    // Arrivals while the first dialog is open must update its denominator.
+    for (let attempt = 0; attempt < 200; attempt++) await Promise.resolve();
+    expect(captured.dialogs[0]!.latest()).toContain("1/3");
+
+    captured.dialogs[0]!.release("Approve once");
+    expect((await first).kind).toBe("once");
+    await waitForDialogs(captured.dialogs, 2);
+    expect(captured.dialogs[1]!.latest()).toContain("2/3");
+
+    captured.dialogs[1]!.release("Approve once");
+    expect((await second).kind).toBe("once");
+    await waitForDialogs(captured.dialogs, 3);
+    expect(captured.dialogs[2]!.latest()).toContain("3/3");
+    captured.dialogs[2]!.release("Approve once");
+    expect((await third).kind).toBe("once");
+
+    // A later lone approval starts a fresh cycle and hides the counter.
+    const lone = ask("delta", "delta *");
+    await waitForDialogs(captured.dialogs, 4);
+    expect(captured.dialogs[3]!.latest()).not.toContain("1/1");
+    captured.dialogs[3]!.release("Approve once");
+    expect((await lone).kind).toBe("once");
+    unregisterSession(ctx);
+  });
+
+  test("grows the open dialog's denominator as approvals arrive one by one", async () => {
+    const cwd = await temporaryDirectory();
+    const ctx = context("queue-growth", cwd, true);
+    const captured = captureQueuedUi(ctx);
+    registerSession(ctx, "low");
+
+    const ask = (key: string) => requestApproval(ctx, {
+      key,
+      title: "Allow bash?",
+      description: "Command exceeds low autonomy",
+      preview: key,
+      principal: "main",
+      items: [{ label: key, value: key, allowed: false, rule: { surface: "bash", pattern: `${key} *` } }],
+    });
+    const flush = async () => {
+      for (let attempt = 0; attempt < 200; attempt++) await Promise.resolve();
+    };
+
+    const open = ask("alpha");
+    await waitForDialogs(captured.dialogs, 1);
+    const visible = captured.dialogs[0]!;
+    // A single pending approval shows no counter at all.
+    expect(visible.latest()).not.toContain("1/1");
+
+    // Each arrival lands separately, so the open dialog must re-render 1/2 → 1/5.
+    const queued: Array<Promise<ApprovalResult>> = [];
+    const names = ["bravo", "charlie", "delta", "echo"];
+    for (let index = 0; index < names.length; index++) {
+      queued.push(ask(names[index]!));
+      await flush();
+      expect(visible.latest(), names[index]).toContain(`1/${index + 2}`);
+    }
+
+    visible.release("Approve once");
+    expect((await open).kind).toBe("once");
+    for (let index = 0; index < queued.length; index++) {
+      await waitForDialogs(captured.dialogs, index + 2);
+      const dialog = captured.dialogs[index + 1]!;
+      expect(dialog.latest()).toContain(`${index + 2}/5`);
+      dialog.release("Approve once");
+      expect((await queued[index]!).kind).toBe("once");
+    }
+    unregisterSession(ctx);
+  });
+
+  test("styles the queue counter consistently and keeps it inside the border", async () => {
+    const cwd = await temporaryDirectory();
+    const ctx = context("queue-style", cwd, true);
+    const captured = captureQueuedUi(ctx);
+    registerSession(ctx, "low");
+
+    const ask = (key: string) => requestApproval(ctx, {
+      key,
+      title: "Allow bash?",
+      description: "Command exceeds low autonomy",
+      preview: key,
+      principal: "main",
+      items: [{ label: key, value: key, allowed: false, rule: { surface: "bash", pattern: `${key} *` } }],
+    });
+
+    const first = ask("alpha");
+    await waitForDialogs(captured.dialogs, 1);
+    const second = ask("bravo");
+    for (let attempt = 0; attempt < 200; attempt++) await Promise.resolve();
+
+    const top = captured.dialogs[0]!.latest().split("\n")[0]!;
+    expect(top).toContain("<bold><fg:accent> 1/2 </fg></bold>");
+    expect(top.endsWith(`${"╮"}</fg>`) || top.endsWith("╮")).toBe(true);
+    const visible = top.replaceAll(/<\/?(?:fg|bg)(?::[a-zA-Z]+)?>|<\/?bold>/g, "");
+    expect([...visible]).toHaveLength(120);
+
+    captured.dialogs[0]!.release("Approve once");
+    await first;
+    await waitForDialogs(captured.dialogs, 2);
+    captured.dialogs[1]!.release("Approve once");
+    await second;
+    unregisterSession(ctx);
+  });
+
   test("shares levels, exact grants, command rules, and path roots across siblings", async () => {
     const cwd = await temporaryDirectory();
     const parent = context("parent-shared", cwd, true);

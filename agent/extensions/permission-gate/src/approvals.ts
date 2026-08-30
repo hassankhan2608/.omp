@@ -39,6 +39,31 @@ interface SessionGrants {
   rules: SessionRule[];
 }
 
+interface ApprovalQueueEntry {
+  displayed: boolean;
+}
+
+/**
+ * Progress across one burst of serialized approvals. `completed` counts
+ * dialogs the user has already answered in this burst, so the visible request
+ * is always `completed + 1` of `completed + entries.length`.
+ */
+interface ApprovalQueueCycle {
+  completed: number;
+  entries: ApprovalQueueEntry[];
+  subscribers: Set<() => void>;
+}
+
+export interface ApprovalProgressSnapshot {
+  ordinal: number;
+  total: number;
+}
+
+export interface ApprovalProgressSource {
+  snapshot(): ApprovalProgressSnapshot;
+  subscribe(listener: () => void): () => void;
+}
+
 interface ApprovalBroker {
   parentSessionId?: string;
   parentUi?: ExtensionUIContext;
@@ -46,6 +71,7 @@ interface ApprovalBroker {
   denialEpoch: number;
   grants: Map<string, SessionGrants>;
   levels: Map<string, PermissionLevel>;
+  cycle: ApprovalQueueCycle;
 }
 
 const BROKER_SYMBOL = Symbol.for("omp.permission-gate.approval-broker.v1");
@@ -61,7 +87,11 @@ const ACTION_DENY = "Deny";
 function broker(): ApprovalBroker {
   const processGlobal = globalThis as typeof globalThis & { [BROKER_SYMBOL]?: ApprovalBroker };
   processGlobal[BROKER_SYMBOL] ??= {
-    queue: Promise.resolve(), denialEpoch: 0, grants: new Map(), levels: new Map(),
+    queue: Promise.resolve(),
+    denialEpoch: 0,
+    grants: new Map(),
+    levels: new Map(),
+    cycle: { completed: 0, entries: [], subscribers: new Set() },
   };
   return processGlobal[BROKER_SYMBOL];
 }
@@ -175,6 +205,8 @@ export interface CompactSelectRequest {
   inlineDescriptions?: boolean;
   initialIndex?: number;
   helpText?: string;
+  /** Serialized-queue position, rendered as a right-aligned header chip. */
+  progress?: ApprovalProgressSource;
 }
 
 function safeUiText(value: string): string {
@@ -244,6 +276,7 @@ export async function selectCompactOption(
   const safePreview = request.preview === undefined ? undefined : safeUiText(request.preview);
   return ui.custom<string | undefined>((tui, theme, keybindings, done) => {
     let selectedIndex = Math.max(0, Math.min(request.initialIndex ?? 0, request.options.length - 1));
+    const unsubscribe = request.progress?.subscribe(() => tui.requestRender());
     return {
       render(width: number): readonly string[] {
         const innerWidth = width - 2;
@@ -286,14 +319,27 @@ export async function selectCompactOption(
         const help = request.helpText ?? "↑/↓ move  ·  Enter select  ·  Esc cancel";
         body.push(theme.fg("dim", ` ${padUiText(help, contentWidth)} `));
 
+        const snapshot = request.progress?.snapshot();
+        const counter = snapshot && snapshot.total > 1 ? ` ${snapshot.ordinal}/${snapshot.total} ` : "";
+        const styledCounter = counter === "" ? "" : theme.bold(theme.fg("accent", counter));
         const chip = ` ${safeTitle} `;
-        const top = chip.length + 2 <= innerWidth
-          ? `${theme.fg("border", "╭─")}${theme.bold(theme.fg("accent", chip))}${theme.fg("border", `${"─".repeat(innerWidth - chip.length - 1)}╮`)}`
-          : theme.fg("border", `╭${"─".repeat(innerWidth)}╮`);
+        // Reserve the counter first: the title truncates before the position is lost.
+        const titleFits = chip.length + counter.length + 2 <= innerWidth;
+        const top = titleFits
+          ? `${theme.fg("border", "╭─")}${theme.bold(theme.fg("accent", chip))}`
+            + `${theme.fg("border", "─".repeat(innerWidth - chip.length - counter.length - 1))}`
+            + `${styledCounter}${theme.fg("border", "╮")}`
+          : counter.length < innerWidth
+            ? `${theme.fg("border", `╭${"─".repeat(innerWidth - counter.length)}`)}`
+              + `${styledCounter}${theme.fg("border", "╮")}`
+            : theme.fg("border", `╭${"─".repeat(innerWidth)}╮`);
         const framed = body.map((line) =>
           `${theme.fg("border", "│")}${line}${theme.fg("border", "│")}`);
         const bottom = theme.fg("border", `╰${"─".repeat(innerWidth)}╯`);
         return [top, ...framed, bottom];
+      },
+      dispose(): void {
+        unsubscribe?.();
       },
       invalidate(): void {},
       handleInput(data: string): void {
@@ -325,6 +371,7 @@ async function selectApprovalAction(
   description: string,
   preview: string,
   actions: readonly CompactSelectOption[],
+  progress?: ApprovalProgressSource,
 ): Promise<string | undefined> {
   const heading = description ? `${title}  ·  ${description}` : title;
   return selectCompactOption(ui, {
@@ -333,6 +380,7 @@ async function selectApprovalAction(
     preview,
     options: actions,
     helpText: "↑/↓ move  ·  Enter select  ·  Esc deny",
+    ...(progress ? { progress } : {}),
   });
 }
 
@@ -401,22 +449,36 @@ function persistApproval(ctx: ExtensionContext, request: ApprovalRequest, result
   if (result.exact) addExactGrant(ctx, request.key);
 }
 
+function notifyQueue(cycle: ApprovalQueueCycle): void {
+  for (const listener of [...cycle.subscribers]) listener();
+}
+
 /** Serialize prompts, forward child asks to the parent UI, and commit grants before releasing the queue. */
 export async function requestApproval(ctx: ExtensionContext, request: ApprovalRequest): Promise<ApprovalResult> {
   const state = broker();
   const ui = ctx.hasUI ? ctx.ui : state.parentUi;
   if (!ui) return { kind: "deny" };
   const queuedAtDenialEpoch = state.denialEpoch;
-  let releaseQueue!: () => void;
+  const cycle = state.cycle;
+  const entry: ApprovalQueueEntry = { displayed: false };
+  cycle.entries.push(entry);
+  notifyQueue(cycle);
+  const progress: ApprovalProgressSource = {
+    snapshot: () => ({ ordinal: cycle.completed + 1, total: cycle.completed + cycle.entries.length }),
+    subscribe: (listener) => {
+      cycle.subscribers.add(listener);
+      return () => cycle.subscribers.delete(listener);
+    },
+  };
+  const { promise: queueTurn, resolve: releaseQueue } = Promise.withResolvers<void>();
   const previous = state.queue;
-  state.queue = new Promise<void>((resolve) => {
-    releaseQueue = resolve;
-  });
+  state.queue = queueTurn;
   await previous;
 
   try {
     if (state.denialEpoch !== queuedAtDenialEpoch) return { kind: "deny" };
     if (request.persistable !== false && requestCovered(ctx, request)) return { kind: "once" };
+    entry.displayed = true;
     const forwarded = !ctx.hasUI;
     const heading = forwarded ? `Subagent ${request.principal}: ${request.title}` : request.title;
     process.emit("omp:approval-requested", {
@@ -452,6 +514,7 @@ export async function requestApproval(ctx: ExtensionContext, request: ApprovalRe
         request.description,
         request.preview ?? request.items.map((item) => item.label).join(" && "),
         stageOne,
+        progress,
       );
       if (choice === "Approve once") return { kind: "once" };
       if (choice === ACTION_DENY || choice === undefined) {
@@ -490,6 +553,11 @@ export async function requestApproval(ctx: ExtensionContext, request: ApprovalRe
     state.denialEpoch++;
     return { kind: "deny" };
   } finally {
+    const index = cycle.entries.indexOf(entry);
+    if (index >= 0) cycle.entries.splice(index, 1);
+    if (entry.displayed) cycle.completed++;
+    if (cycle.entries.length === 0) cycle.completed = 0;
+    notifyQueue(cycle);
     releaseQueue();
   }
 }

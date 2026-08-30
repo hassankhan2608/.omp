@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import extension from "../src/permission-gate";
 import {
+  addExactGrant,
+  addSessionRules,
   currentLevel,
+  hasExactGrant,
   registerSession,
   requestApproval,
   sessionAllows,
@@ -20,7 +23,7 @@ import {
   type PermissionGateConfig,
   type PermissionLevel,
 } from "../src/config";
-import { assessPath } from "../src/paths";
+import { assessPath, externalGrantRoot, isPathWithin } from "../src/paths";
 import { patternMatches, resolveCommand } from "../src/policy";
 import { analyzeBash } from "../src/shell";
 
@@ -390,6 +393,22 @@ describe("configuration and shell safety", () => {
     expect((await assessPath("/var/tmp/permission-gate-report.txt", project, project, rules)).policy).toBe("ask");
   });
 
+  test("external grant roots include the directory itself but not siblings", async () => {
+    const root = await temporaryDirectory();
+    const directory = join(root, "outside");
+    const nested = join(directory, "nested");
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(directory, "file.txt"), "x");
+
+    expect(await externalGrantRoot(directory)).toBe(directory);
+    expect(await externalGrantRoot(join(directory, "file.txt"))).toBe(directory);
+    expect(await externalGrantRoot(join(directory, "missing.txt"))).toBe(directory);
+    expect(isPathWithin(directory, directory)).toBe(true);
+    expect(isPathWithin(directory, nested)).toBe(true);
+    expect(isPathWithin(directory, `${directory}-other`)).toBe(false);
+    expect(isPathWithin(directory, root)).toBe(false);
+  });
+
   test("allows canonical temporary paths for reads and writes without allowing symlink escapes", async () => {
     const root = await temporaryDirectory();
     const project = join(root, "project");
@@ -404,6 +423,38 @@ describe("configuration and shell safety", () => {
 });
 
 describe("OMP approval UI and runtime", () => {
+  test("shares levels, exact grants, command rules, and path roots across siblings", async () => {
+    const cwd = await temporaryDirectory();
+    const parent = context("parent-shared", cwd, true);
+    const childA = context("child-a", cwd, false);
+    const childB = context("child-b", cwd, false);
+    registerSession(parent, "low");
+    registerSession(childA, "low");
+    registerSession(childB, "low");
+
+    addSessionRules(childA, [
+      { surface: "bash", pattern: "git push *" },
+      { surface: "external_directory", pattern: "/srv/shared" },
+    ]);
+    addExactGrant(childA, "exact-key");
+
+    expect(sessionAllows(childB, "bash", "git push --tags")).toBe(true);
+    expect(sessionAllows(parent, "bash", "git push --tags")).toBe(true);
+    expect(sessionAllows(childB, "external_directory", "/srv/shared")).toBe(true);
+    expect(sessionAllows(childB, "external_directory", "/srv/shared/nested/file")).toBe(true);
+    expect(sessionAllows(childB, "external_directory", "/srv/shared-other")).toBe(false);
+    expect(hasExactGrant(parent, "exact-key")).toBe(true);
+
+    // A finished subagent must not revoke grants the parent still relies on.
+    unregisterSession(childA);
+    expect(sessionAllows(parent, "bash", "git push --tags")).toBe(true);
+    expect(currentLevel(childB, "low")).toBe("low");
+
+    unregisterSession(childB);
+    unregisterSession(parent);
+    expect(sessionAllows(parent, "bash", "git push --tags")).toBe(false);
+  });
+
   test("uses a one-screen session pattern choice for one command", async () => {
     const cwd = await temporaryDirectory();
     const ctx = context("single-rule", cwd, true, async (_prompt, options) =>

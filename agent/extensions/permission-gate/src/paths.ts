@@ -49,7 +49,11 @@ export async function canonicalPath(value: string, cwd: string): Promise<string>
   return resolved;
 }
 
-function isInside(root: string, candidate: string): boolean {
+/**
+ * Segment-safe containment. A grant for `/srv/data` covers `/srv/data` itself
+ * and everything beneath it, but never `/srv/data-other` or `/srv`.
+ */
+export function isPathWithin(root: string, candidate: string): boolean {
   const relation = relative(root, candidate);
   return relation === "" || (!relation.startsWith(`..${sep}`) && relation !== ".." && !isAbsolute(relation));
 }
@@ -91,13 +95,13 @@ export async function assessPath(
     const denied = lastMatching(spelling, rules.denylist);
     if (denied) {
       return {
-        raw, absolute, canonical, external: !isInside(canonicalProjectRoot, canonical), policy: "deny",
+        raw, absolute, canonical, external: !isPathWithin(canonicalProjectRoot, canonical), policy: "deny",
         reason: "Sensitive path denylist", pattern: denied,
       };
     }
   }
 
-  const external = !isInside(canonicalProjectRoot, canonical);
+  const external = !isPathWithin(canonicalProjectRoot, canonical);
   const explicitlyAllowed = lastMatching(canonical, rules.externalAllowlist)
     || access === "read" && lastMatching(canonical, rules.externalReadAllowlist);
   if (!external || explicitlyAllowed) {
@@ -109,9 +113,12 @@ export async function assessPath(
   };
 }
 
-export async function externalGrantPattern(canonical: string): Promise<string> {
-  const directory = await lstat(canonical)
+/** Canonical directory root a session grant covers, including the root itself. */
+export async function externalGrantRoot(canonical: string): Promise<string> {
+  return lstat(canonical)
     .then((info) => info.isDirectory() ? canonical : dirname(canonical))
-    .catch(() => dirname(canonical));
-  return join(directory, "*").replaceAll("\\", "/");
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return dirname(canonical);
+      throw error;
+    });
 }

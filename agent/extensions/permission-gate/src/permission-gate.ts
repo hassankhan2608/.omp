@@ -14,7 +14,7 @@ import {
 } from "./approvals";
 import { canonicalizeCommand, type CommandIdentity } from "./command-identity";
 import { LEVEL_ORDER, loadConfig, type PermissionGateConfig, type PermissionLevel } from "./config";
-import { assessPath, externalGrantPattern } from "./paths";
+import { assessPath, externalGrantRoot } from "./paths";
 import { commandGrantPattern, resolveCommand } from "./policy";
 import { analyzeBash, safetyRequiresApproval, warmBashParser, type BashAnalysis } from "./shell";
 
@@ -220,14 +220,14 @@ export default function permissionGate(pi: ExtensionAPI, agentDirectory: string 
       pathContexts.push(`${path}=>${assessment.canonical}`);
       if (assessment.policy === "deny") return deny(assessment.reason ?? "Path denied", path);
       if (assessment.policy !== "ask") continue;
-      const pattern = await externalGrantPattern(assessment.canonical);
+      const root = await externalGrantRoot(assessment.canonical);
       const granted = sessionAllows(ctx, "external_directory", assessment.canonical);
       items.push({
         label: path,
-        description: pattern,
+        description: `${root} and everything inside it`,
         value: assessment.canonical,
         allowed: granted,
-        ...(!granted ? { rule: { surface: "external_directory", pattern } } : {}),
+        ...(!granted ? { rule: { surface: "external_directory", pattern: root } } : {}),
       });
       if (!granted) {
         needsApproval = true;

@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionContext, ExtensionUIContext, ExtensionUISelectItem } from "@oh-my-pi/pi-coding-agent";
 import type { PermissionLevel } from "./config";
+import { isPathWithin } from "./paths";
 import { patternMatches } from "./policy";
 
 export interface SessionRule {
@@ -65,9 +66,19 @@ function broker(): ApprovalBroker {
   return processGlobal[BROKER_SYMBOL];
 }
 
+/**
+ * Grants belong to the interactive session that owns the approval UI, so the
+ * main agent and every subagent it spawns resolve to one namespace.
+ */
+export function grantSessionId(ctx: ExtensionContext): string {
+  const own = ctx.sessionManager.getSessionId();
+  if (ctx.hasUI) return own;
+  return broker().parentSessionId ?? own;
+}
+
 function sessionGrants(ctx: ExtensionContext): SessionGrants {
   const state = broker();
-  const sessionId = ctx.sessionManager.getSessionId();
+  const sessionId = grantSessionId(ctx);
   let grants = state.grants.get(sessionId);
   if (!grants) {
     grants = { exact: new Set(), rules: [] };
@@ -79,8 +90,8 @@ function sessionGrants(ctx: ExtensionContext): SessionGrants {
 export function registerSession(ctx: ExtensionContext, defaultLevel: PermissionLevel): void {
   const state = broker();
   const sessionId = ctx.sessionManager.getSessionId();
-  state.levels.set(sessionId, defaultLevel);
   if (!ctx.hasUI) return;
+  state.levels.set(sessionId, defaultLevel);
   state.parentSessionId = sessionId;
   state.parentUi = ctx.ui;
 }
@@ -88,6 +99,8 @@ export function registerSession(ctx: ExtensionContext, defaultLevel: PermissionL
 export function unregisterSession(ctx: ExtensionContext): void {
   const state = broker();
   const sessionId = ctx.sessionManager.getSessionId();
+  // Only the owning interactive session may retire the shared namespace.
+  if (state.parentSessionId !== undefined && state.parentSessionId !== sessionId) return;
   state.grants.delete(sessionId);
   state.levels.delete(sessionId);
   if (state.parentSessionId === sessionId) {
@@ -97,22 +110,23 @@ export function unregisterSession(ctx: ExtensionContext): void {
 }
 
 export function currentLevel(ctx: ExtensionContext, fallback: PermissionLevel): PermissionLevel {
-  const state = broker();
-  const sessionId = ctx.hasUI ? ctx.sessionManager.getSessionId() : state.parentSessionId ?? ctx.sessionManager.getSessionId();
-  return state.levels.get(sessionId) ?? fallback;
+  return broker().levels.get(grantSessionId(ctx)) ?? fallback;
 }
 
 export function setLevel(ctx: ExtensionContext, level: PermissionLevel): void {
-  broker().levels.set(ctx.sessionManager.getSessionId(), level);
+  broker().levels.set(grantSessionId(ctx), level);
 }
 
 export function hasExactGrant(ctx: ExtensionContext, key: string): boolean {
-  return broker().grants.get(ctx.sessionManager.getSessionId())?.exact.has(key) ?? false;
+  return broker().grants.get(grantSessionId(ctx))?.exact.has(key) ?? false;
 }
 
 export function sessionAllows(ctx: ExtensionContext, surface: string, value: string): boolean {
-  const rules = broker().grants.get(ctx.sessionManager.getSessionId())?.rules;
-  return rules?.some((rule) => rule.surface === surface && patternMatches(value, rule.pattern)) ?? false;
+  const rules = broker().grants.get(grantSessionId(ctx))?.rules;
+  return rules?.some((rule) => rule.surface === surface
+    && (rule.surface === "external_directory"
+      ? isPathWithin(rule.pattern, value)
+      : patternMatches(value, rule.pattern))) ?? false;
 }
 
 export function addSessionRules(ctx: ExtensionContext, rules: SessionRule[]): void {

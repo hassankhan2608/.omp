@@ -20,6 +20,7 @@
   "events": {
     "agent.complete": "complete",
     "approval.requested": "input",
+    "input.requested": "input",
     "agent.error": "error"
   }
 }

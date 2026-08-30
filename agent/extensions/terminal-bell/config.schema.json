@@ -36,9 +36,10 @@
       "properties": {
         "agent.complete": { "type": "string", "minLength": 1 },
         "approval.requested": { "type": "string", "minLength": 1 },
+        "input.requested": { "type": "string", "minLength": 1 },
         "agent.error": { "type": "string", "minLength": 1 }
       },
-      "required": ["agent.complete", "approval.requested", "agent.error"]
+      "required": ["agent.complete", "approval.requested", "input.requested", "agent.error"]
     }
   },
   "required": ["enabled", "debounceMs", "focusTerminal", "sounds", "events"]

@@ -57,6 +57,13 @@ export function registerBellHandlers(
     listeningForCustomApprovals = false;
   });
 
+  // The ask tool opens a blocking prompt without going through any approval
+  // path, so it needs its own signal that the agent is waiting on the user.
+  pi.on("tool_call", async (event, ctx) => {
+    if (!ctx.hasUI || event.toolName !== "ask") return;
+    await (await notifier)?.notify("input.requested");
+  });
+
   pi.on("agent_end", async (event, ctx) => {
     if (!ctx.hasUI) return;
     const bellEvent = classifyAgentEnd(event);

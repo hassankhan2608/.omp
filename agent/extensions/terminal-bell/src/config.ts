@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
-export const BELL_EVENTS = ["agent.complete", "approval.requested", "agent.error"] as const;
+export const BELL_EVENTS = ["agent.complete", "approval.requested", "input.requested", "agent.error"] as const;
 export type BellEvent = (typeof BELL_EVENTS)[number];
 
 export interface SoundConfig {
@@ -30,6 +30,7 @@ export const DEFAULT_CONFIG: BellConfig = {
   events: {
     "agent.complete": "complete",
     "approval.requested": "input",
+    "input.requested": "input",
     "agent.error": "error",
   },
 };

@@ -96,6 +96,34 @@ describe("OMP event mapping", () => {
     await Promise.resolve();
     expect(notifications).toHaveLength(1);
   });
+
+  test("rings when the agent asks the user a question", async () => {
+    type Handler = (event: unknown, ctx: { hasUI: boolean }) => unknown;
+    const handlers = new Map<string, Handler>();
+    const pi = {
+      on: (event: string, handler: unknown) => handlers.set(event, handler as Handler),
+    } as unknown as ExtensionAPI;
+    const notifications: string[] = [];
+    registerBellHandlers(pi, Promise.resolve({
+      notify: async (event) => {
+        notifications.push(event);
+        return true;
+      },
+    }));
+    await handlers.get("session_start")?.({}, { hasUI: true });
+
+    await handlers.get("tool_call")?.({ toolName: "ask", input: {} }, { hasUI: true });
+    expect(notifications).toEqual(["input.requested"]);
+
+    // Unrelated tools stay silent.
+    await handlers.get("tool_call")?.({ toolName: "bash", input: {} }, { hasUI: true });
+    await handlers.get("tool_call")?.({ toolName: "edit", input: {} }, { hasUI: true });
+    expect(notifications).toEqual(["input.requested"]);
+
+    // Headless subagents must not ring on the parent's terminal.
+    await handlers.get("tool_call")?.({ toolName: "ask", input: {} }, { hasUI: false });
+    expect(notifications).toEqual(["input.requested"]);
+  });
 });
 
 describe("configuration", () => {

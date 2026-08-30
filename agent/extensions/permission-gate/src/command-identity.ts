@@ -26,18 +26,6 @@ const PEELABLE_WRAPPERS: Record<string, true> = { timeout: true, time: true };
  */
 const NORMALIZABLE_INDIRECTION: Record<string, true> = { timeout: true, time: true, command: true };
 
-/**
- * Executables that can run arbitrary programs. A wrapper around any of these
- * cannot inherit the inner command's policy, because the inner text is data.
- */
-const INTERPRETERS: Record<string, true> = {
-  bash: true, bun: true, bunx: true, chroot: true, dash: true, deno: true, doas: true, env: true,
-  eval: true, exec: true, fish: true, flock: true, ksh: true, nice: true, node: true, nohup: true,
-  npx: true, osascript: true, parallel: true, perl: true, php: true, python: true, python3: true,
-  ruby: true, "rust-parallel": true, rush: true, setsid: true, sh: true, stdbuf: true, su: true,
-  sudo: true, watch: true, xargs: true, zsh: true,
-};
-
 /** `timeout` options that never redirect output or change the child program. */
 const TIMEOUT_FLAGS: Record<string, true> = {
   "--preserve-status": true, "--foreground": true, "-v": true, "--verbose": true,
@@ -179,12 +167,6 @@ function resolveWrapper(
     return {
       ...unchanged,
       safety: { reason: "Wrapped command uses a path-qualified executable", persistable: false },
-    };
-  }
-  if (INTERPRETERS[childExecutable]) {
-    return {
-      ...unchanged,
-      safety: { reason: `Wrapped interpreter ${childExecutable} cannot be normalized safely`, persistable: false },
     };
   }
   return resolveCommandShape(childExecutable, arguments_.slice(index + 1), depth + 1);

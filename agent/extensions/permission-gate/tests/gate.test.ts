@@ -313,13 +313,13 @@ describe("canonical command identity", () => {
 
   test("fails closed for behavior-changing Git options and ambiguous wrappers", async () => {
     expect((await commandIdentity("git -c core.pager=evil status")).safety?.reason).toContain("Git global option");
-    expect((await commandIdentity("timeout 30 bash -c 'git status'")).safety?.reason).toContain("interpreter");
+    expect((await commandIdentity("timeout 30 bash -c 'git status'")).safety?.reason).toContain("Opaque shell program");
     expect((await commandIdentity("time -o timing.txt git status")).safety?.reason).toContain("output");
     expect((await commandIdentity("command -v git node")).safety?.reason).toContain("command -v");
   });
 
   test("represents bounded formatter writes as a medium floor", async () => {
-    expect((await commandIdentity("prettier --write src")).safety).toMatchObject({
+    expect((await commandIdentity("biome format --write src")).safety).toMatchObject({
       minimumLevel: "medium",
       persistable: true,
     });
@@ -327,6 +327,36 @@ describe("canonical command identity", () => {
       persistable: false,
     });
     expect((await commandIdentity("sed -i 's/x/y/' file.txt")).safety?.minimumLevel).toBeUndefined();
+  });
+
+  test("treats timeout and time as transparent wrappers", async () => {
+    // The inner command's own policy decides: bun test is allowlisted at low.
+    const transparent = await commandIdentity("timeout 300 bun test tests/usage.test.ts");
+    expect(transparent.canonical).toBe("bun test tests/usage.test.ts");
+    expect(transparent.safety).toBeUndefined();
+    expect(resolveCommand(defaultConfig(), "low", transparent).policy).toBe("allow");
+
+    // Children that are themselves indirection keep their always-ask floor.
+    const indirect = await commandIdentity("timeout 30 xargs rm -rf build");
+    expect(indirect.canonical).toBe("xargs rm -rf build");
+    expect(indirect.safety?.persistable).toBe(false);
+    expect(safetyRequiresApproval(indirect.safety, "high")).toBe(true);
+
+    const injected = await commandIdentity("timeout 30 env LD_PRELOAD=/tmp/evil.so git status");
+    expect(injected.safety?.reason).toContain("env");
+    expect(safetyRequiresApproval(injected.safety, "high")).toBe(true);
+
+    // Shell code strings stay opaque through wrappers.
+    const opaque = await commandIdentity("timeout 30 bash -c 'rm -rf /'");
+    expect(opaque.safety?.reason).toContain("Opaque shell program");
+    expect(safetyRequiresApproval(opaque.safety, "high")).toBe(true);
+
+    const lookup = await commandIdentity("timeout 30 command -v git");
+    expect(lookup.safety).toBeUndefined();
+    // prettier --write is deliberately low-tier in this configuration.
+    const prettier = await commandIdentity("prettier --write src");
+    expect(prettier.safety).toBeUndefined();
+    expect(resolveCommand(defaultConfig(), "low", prettier).policy).toBe("allow");
   });
 });
 
@@ -388,7 +418,6 @@ describe("evidence-backed tiers", () => {
   test("admits bounded mutation forms only at medium", async () => {
     const config = defaultConfig();
     const bounded = [
-      "prettier --write src",
       "biome format --write src",
       "unzip archive.zip -d build",
       "truncate -s 0 build/log.txt",
@@ -458,7 +487,6 @@ describe("configuration and shell safety", () => {
       "diff --output=patch left right",
       "date --set=2026-01-01",
       "bunx eslint --fix .",
-      "prettier --write .",
       "eslint --cache .",
       "biome check --write .",
       "oxlint --fix .",

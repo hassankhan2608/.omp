@@ -323,16 +323,6 @@ const COMMAND_SAFETY: Readonly<Record<string, readonly CommandSafetyRule[]>> = {
     subcommands: ["prettier", "eslint", "biome", "oxlint", "ruff", "black"],
     arguments: ["--write", "--fix", "--in-place", "--unsafe-fixes"],
   }],
-  bun: [{
-    reason: "formatter and linter write or fix mode can modify workspace files",
-    subcommands: ["x"],
-    arguments: ["--write", "--fix", "--in-place", "--unsafe-fixes"],
-  }],
-  prettier: [{
-    reason: "prettier write mode modifies workspace files",
-    arguments: ["--write"],
-    minimumLevel: "medium",
-  }],
   eslint: [{
     reason: "eslint fix or cache mode writes workspace files",
     arguments: ["--fix", "--cache"],
@@ -687,6 +677,13 @@ export function commandSafetyFor(
   arguments_: readonly string[],
 ): CommandSafety | undefined {
   if (SYSTEM_MUTATORS[executable]) return alwaysAsk(`${executable} changes machine or account state`);
+  if (ALWAYS_INDIRECT[executable]
+    && !(executable === "command" && arguments_[0] === "-v" && arguments_.length === 2)) {
+    return { reason: `Command indirection through ${executable}`, persistable: false, indirection: executable };
+  }
+  if (SHELLS[executable] && arguments_.some((word) => /^-[^-]*c/.test(word))) {
+    return alwaysAsk(`Opaque shell program through ${executable} -c`);
+  }
   if (executable === "git" && arguments_.includes("push")
     && (hasArgument(arguments_, "--force") || hasArgument(arguments_, "--force-with-lease")
       || hasArgument(arguments_, "--force-if-includes") || hasShortFlag(arguments_, "f"))) {
@@ -740,12 +737,8 @@ function commandSafety(text: string, redirected: boolean, backgrounded: boolean)
   if (inlineEnvironment) return alwaysAsk("Inline environment variables can change command behavior");
   if (redirected) return alwaysAsk("Shell redirection");
   if (backgrounded) return alwaysAsk("Background execution");
-  if (ALWAYS_INDIRECT[executable]) {
-    return { reason: `Command indirection through ${executable}`, persistable: false, indirection: executable };
-  }
-  if (SHELLS[executable] && words.slice(1).some((word) => /^-[^-]*c/.test(word))) {
-    return alwaysAsk(`Opaque shell program through ${executable} -c`);
-  }
+  // Indirection and opaque-shell floors live in commandSafetyFor so they also
+  // apply to children of peeled wrappers.
   return commandSafetyFor(executable, words.slice(1));
 }
 

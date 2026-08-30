@@ -25,6 +25,8 @@ Current defects:
 - Reduce low/medium false positives without weakening hard-deny classes.
 - Keep all grants session-only; a new OMP session starts without prior grants.
 
+- Show serialized approval-queue progress as a stable top-right counter when more than one approval is pending.
+
 ## Non-goals
 
 - No RTK-specific policy. RTK was an illustrative example, not a recurring command in the analyzed sessions.
@@ -133,7 +135,42 @@ Read remains outside this change unless it already passes through Permission Gat
 
 Sensitive paths such as `.env`, SSH keys, credential files, and token paths remain denied regardless of a broad external-directory grant.
 
-### 6. Prompt queue timeout
+### 6. Approval queue progress indicator
+
+When more than one approval request is active or waiting in the serialized broker queue, the custom Permission Gate frame displays a progress chip at the extreme right of the top border:
+
+```text
+╭─ Permission Gate ─────────────────────────────────────────── 1/3 ─╮
+│ Allow bash?  ·  Command exceeds low autonomy                       │
+│ $ git -C /repo status                                              │
+╰─────────────────────────────────────────────────────────────────────╯
+```
+
+The counter represents queued approval requests, not grantable items inside the current batched prompt.
+
+Queue behavior:
+
+1. Enqueuing a request increments the active queue cycle's total.
+2. The visible request displays its one-based ordinal over the current total.
+3. New arrivals update the denominator while the dialog is open.
+4. Requests that become covered by a grant before display leave the queue without opening another dialog; the remaining counter is recomputed.
+5. When the queue drains, the cycle and ordinal reset. A later independent approval starts a new cycle at `1/1`, which is hidden.
+6. Denial or cancellation still releases queued requests according to the existing denial-epoch behavior; the counter must not keep stale entries.
+
+The broker exposes queue progress to `selectCompactOption` through immutable render state plus a subscription that calls `tui.requestRender()` when the total changes. Subscribers are removed when the dialog closes.
+
+Rendering rules:
+
+- Hide the chip for a single request; show it only when the total is greater than one.
+- Right-align the complete `current/total` chip immediately before the top-right corner.
+- Style the entire chip with one stable theme color and bold weight for every state. Use the existing `accent` theme color; do not mix colors inside the counter.
+- Measure unstyled visible text before applying theme escape sequences.
+- Reserve border space for the counter so it never overlays or wraps the heading, preview, options, or help text.
+- At narrow widths, keep the counter at the right edge and omit or truncate the left `Permission Gate` chip before dropping the counter.
+- The non-custom `ui.select` fallback appends `[current/total]` to its title because it cannot right-align border content.
+
+### 7. Prompt queue timeout
+
 
 Replace the test-only module-global timeout seam with OMP's supported extension configuration:
 
@@ -144,7 +181,7 @@ extensionHandlers:
 
 Permission Gate continues to serialize visible prompts. Ten minutes applies to the total extension handler wait, including time queued behind another prompt. A timeout still denies/fails closed; it never auto-approves.
 
-### 7. Tier policy additions
+### 8. Tier policy additions
 
 #### Low: read-only and non-mutating
 
@@ -208,6 +245,13 @@ interface PathGrant {
   includeRoot: true;
   includeDescendants: true;
 }
+
+interface ApprovalQueueProgress {
+  cycleId: number;
+  ordinal: number;
+  total: number;
+  subscribe(listener: () => void): () => void;
+}
 ```
 
 These interfaces are conceptual contracts; implementation names may follow existing project conventions, but each representation and scope must remain distinct.
@@ -238,6 +282,10 @@ Existing public slash-command behavior and configuration keys remain compatible 
 - Sensitive paths overriding directory grants.
 - Edit/write targets reusing Bash-created path grants and vice versa.
 - One prompt for multi-file external edits.
+- Queue progress rendering for `1/3`, `2/3`, and `3/3`, including a request that arrives while the first dialog is open.
+- Queue-total recomputation when a waiting request becomes covered, denial/cancellation cleanup, and reset after the queue drains.
+- Header rendering at normal and narrow terminal widths: right alignment, no body overlap, one consistent accent style, and correct visible-width accounting.
+- Fallback `ui.select` title formatting when the custom renderer is unavailable.
 - Supported 600,000 ms extension-handler timeout configuration.
 - Every new low/medium pattern has a mutating or ambiguous negative case.
 
@@ -259,13 +307,15 @@ Record before/after ask counts for low, medium, and high. Acceptance requires:
 3. Exercise the exact root and a descendant through Bash, edit, and write; observe no repeat prompt.
 4. Start two subagents using the same approved scope; observe no sibling repeat prompt.
 5. Run a compound safe-wrapper and `git -C` command; observe no more than one prompt.
-6. Queue subagent requests behind a visible prompt for longer than 30 seconds; observe no timeout and no auto-approval.
-7. Start a new OMP session and confirm the external directory asks again.
+6. While the first of three serialized subagent approvals is visible, observe `1/3` at the extreme right; then observe `2/3` and `3/3` as the queue advances without covering body text.
+7. Enqueue another approval while the first dialog is open and confirm the denominator updates without reopening the dialog.
+8. Queue subagent requests behind a visible prompt for longer than 30 seconds; observe no timeout and no auto-approval.
+9. Start a new OMP session and confirm the external directory asks again and a single request shows no counter.
 
 ## Rollout
 
 1. Land canonical identity and tests without broad policy additions.
-2. Land parent-session and path-grant semantics.
+2. Land parent-session and path-grant semantics together with reactive queue accounting and the top-right progress chip.
 3. Add edit/write interception and timeout configuration.
 4. Add low and medium tier patterns with negative tests.
 5. Replay the corpus and run live OMP smoke tests.
@@ -278,4 +328,5 @@ Record before/after ask counts for low, medium, and high. Acceptance requires:
 - The same grant does not survive a new OMP session.
 - `git -C` and safe wrappers inherit underlying policy without generating broad wrapper grants.
 - Queued subagents do not fail at 30 seconds while waiting for approval.
+- Multiple serialized approvals show a right-aligned, consistently styled `current/total` counter that updates as the queue changes, never overlaps dialog content, and disappears for a single request.
 - Low/medium ask counts decrease against the recorded corpus without weakening hard denies.

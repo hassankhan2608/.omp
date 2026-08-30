@@ -155,10 +155,55 @@ const COMMAND_SAFETY: Readonly<Record<string, readonly CommandSafetyRule[]>> = {
     shortFlags: ["z", ".", "L"],
   }],
   grep: [{
-    reason: "grep can recursively traverse directory boundaries",
-    arguments: ["--recursive", "--dereference-recursive"],
-    shortFlags: ["r", "R"],
+    reason: "grep can follow symbolic links while recursing",
+    arguments: ["--dereference-recursive"],
+    shortFlags: ["R"],
   }],
+  unzip: [
+    {
+      reason: "unzip overwrite and update modes replace existing files",
+      arguments: ["-o", "-f", "-u", "-B"],
+    },
+    {
+      reason: "unzip extracts archive members to disk",
+      always: true,
+      unlessArguments: ["-l", "--list", "-t", "-v", "-z", "-p", "-c"],
+      minimumLevel: "medium",
+    },
+  ],
+  truncate: [{
+    reason: "truncate rewrites file length in place",
+    always: true,
+    minimumLevel: "medium",
+  }],
+  openssl: [{
+    reason: "openssl can write generated material to files",
+    arguments: ["-out", "-writerand", "-keyout", "-passout", "-rand"],
+  }],
+  journalctl: [{
+    reason: "journalctl maintenance rotates, flushes, or deletes journal data",
+    arguments: ["--rotate", "--sync", "--flush", "--relinquish-var", "--smart-relinquish-var"],
+    argumentPrefixes: ["--vacuum-"],
+  }],
+  omp: [
+    {
+      reason: "omp extension and config overrides change which code runs",
+      arguments: ["--extension", "-e", "--config", "--plugin-dir"],
+    },
+    {
+      reason: "omp models refresh rewrites the local model catalog",
+      subcommands: ["models"],
+      arguments: ["refresh"],
+    },
+    {
+      reason: "omp plugin management installs, removes, or toggles code",
+      subcommands: ["plugin"],
+      arguments: [
+        "install", "uninstall", "link", "enable", "disable", "upgrade", "marketplace", "config",
+        "doctor", "discover", "features",
+      ],
+    },
+  ],
   ag: [{
     reason: "the silver searcher can cross hidden, ignored, and symbolic-link boundaries or execute a pager",
     arguments: ["--hidden", "--unrestricted", "--follow", "--pager"],

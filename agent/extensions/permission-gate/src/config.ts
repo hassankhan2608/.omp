@@ -85,6 +85,10 @@ const LOW_COMMANDS = [
   "bunx biome lint *", "bun x biome check *", "bun x biome lint *", "biome check *", "biome lint *",
   "bunx oxlint *", "bun x oxlint *", "oxlint *", "ruff check *", "ruff format --check *",
   "black --check *", "mypy *",
+  "command -v *", "strings *", "qmllint *", "fold *", "od *",
+  "tailscale status *", "tailscale ping *",
+  "omp --help", "omp --version", "omp models *", "omp plugin list *",
+  "openssl rand *", "unzip -l *", "journalctl *",
 ];
 
 const MEDIUM_COMMANDS = [
@@ -94,6 +98,12 @@ const MEDIUM_COMMANDS = [
   "npx *", "yarn *", "pnpm *", "bun *", "bunx *", "node *", "deno *", "pip *", "python *", "python3 *",
   "pytest *", "poetry *", "uv *", "cargo *", "rustc *", "rustfmt *", "go *", "make *", "cmake *",
   "gradle *", "mvn *", "curl *", "wget *", "docker build *", "docker images *", "docker ps *", "docker logs *",
+  "prettier --write *", "bunx prettier --write *", "bun x prettier --write *",
+  "biome format --write *", "biome check --write *",
+  "bunx biome format --write *", "bun x biome format --write *",
+  "unzip *", "truncate *",
+  "gh issue create *", "gh issue edit *", "gh issue comment *", "gh issue close *", "gh issue reopen *",
+  "gh pr create *", "gh pr edit *", "gh pr comment *", "gh pr review *", "gh pr close *", "gh pr reopen *",
 ];
 
 const MEDIUM_DENYLIST = [

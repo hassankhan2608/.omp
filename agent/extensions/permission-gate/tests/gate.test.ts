@@ -27,7 +27,7 @@ import {
 import { assessPath, externalGrantRoot, isPathWithin } from "../src/paths";
 import { patternMatches, resolveCommand } from "../src/policy";
 import { extractToolPaths } from "../src/tool-paths";
-import { analyzeBash } from "../src/shell";
+import { analyzeBash, safetyRequiresApproval } from "../src/shell";
 
 const temporaryDirectories: string[] = [];
 
@@ -302,6 +302,92 @@ describe("canonical command identity", () => {
       persistable: false,
     });
     expect((await commandIdentity("sed -i 's/x/y/' file.txt")).safety?.minimumLevel).toBeUndefined();
+  });
+});
+
+describe("evidence-backed tiers", () => {
+  test("admits evidenced read-only commands at low", async () => {
+    const config = defaultConfig();
+    const allowed = [
+      "grep -r needle src",
+      "grep --recursive needle src",
+      "strings binary",
+      "qmllint Main.qml",
+      "tailscale status",
+      "tailscale ping host",
+      "omp --help",
+      "omp --version",
+      "omp models",
+      "omp models find glm",
+      "omp plugin list",
+      "openssl rand -hex 16",
+      "unzip -l archive.zip",
+      "fold -w 80 file.txt",
+      "od -An -tx1 file.bin",
+      "journalctl -u sshd --since today",
+      "command -v git",
+      "timeout 30 git status --short",
+      "git -C /srv/repo status --short",
+    ];
+    for (const command of allowed) {
+      const identity = await commandIdentity(command);
+      expect(safetyRequiresApproval(identity.safety, "low"), command).toBe(false);
+      expect(resolveCommand(config, "low", identity).policy, command).toBe("allow");
+    }
+  });
+
+  test("keeps mutating and ambiguous variants gated at medium", async () => {
+    const config = defaultConfig();
+    const gated = [
+      "grep -R needle .",
+      "omp models refresh",
+      "omp plugin install evil",
+      "journalctl --vacuum-time=1d",
+      "openssl rand -out secret.bin 32",
+      "openssl rand -writerand seed 32",
+      "timeout 30 bash -c 'touch /tmp/pwn'",
+      "sed -i 's/x/y/' file.txt",
+      "perl -i -e 'system q(id)' file.txt",
+      "unzip -o archive.zip",
+      "gh pr merge 42",
+      "gh secret set TOKEN",
+    ];
+    for (const command of gated) {
+      const identity = await commandIdentity(command);
+      const decision = resolveCommand(config, "medium", identity);
+      const asks = decision.policy !== "allow" || safetyRequiresApproval(identity.safety, "medium");
+      expect(asks, command).toBe(true);
+    }
+  });
+
+  test("admits bounded mutation forms only at medium", async () => {
+    const config = defaultConfig();
+    const bounded = [
+      "prettier --write src",
+      "biome format --write src",
+      "unzip archive.zip -d build",
+      "truncate -s 0 build/log.txt",
+      "gh issue comment 42 --body fixed",
+      "gh pr review 42 --approve",
+    ];
+    for (const command of bounded) {
+      const identity = await commandIdentity(command);
+      const lowAsks = resolveCommand(config, "low", identity).policy !== "allow"
+        || safetyRequiresApproval(identity.safety, "low");
+      expect(lowAsks, `${command} at low`).toBe(true);
+      expect(resolveCommand(config, "medium", identity).policy, `${command} at medium`).toBe("allow");
+      expect(safetyRequiresApproval(identity.safety, "medium"), `${command} floor at medium`).toBe(false);
+    }
+  });
+
+  test("keeps the tracked active configuration aligned with defaults", async () => {
+    const trackedPath = configPath(join(import.meta.dir, "..", "..", ".."));
+    const tracked = JSON.parse(await readFile(trackedPath, "utf8")) as PermissionGateConfig;
+    const { $schema: trackedSchema, ...trackedRest } = tracked;
+    const { $schema: defaultSchema, ...defaultRest } = defaultConfig();
+    expect(trackedSchema).toBeString();
+    expect(defaultSchema).toBeUndefined();
+    expect(trackedRest).toEqual(defaultRest);
   });
 });
 

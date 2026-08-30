@@ -37,11 +37,7 @@ export class TerminalNotifier {
   readonly #config: BellConfig;
   readonly #extensionDir: string;
   readonly #runtime: NotifierRuntime;
-  #lastNotificationAt: Record<BellEvent, number> = {
-    "agent.complete": Number.NEGATIVE_INFINITY,
-    "approval.requested": Number.NEGATIVE_INFINITY,
-    "agent.error": Number.NEGATIVE_INFINITY,
-  };
+  #lastNotificationAt = Number.NEGATIVE_INFINITY;
 
   constructor(config: BellConfig, extensionDir: string, runtime: NotifierRuntime = DEFAULT_RUNTIME) {
     this.#config = config;
@@ -55,8 +51,8 @@ export class TerminalNotifier {
     if (!sound?.enabled) return false;
 
     const now = this.#runtime.now();
-    if (now - this.#lastNotificationAt[event] < this.#config.debounceMs) return false;
-    this.#lastNotificationAt[event] = now;
+    if (now - this.#lastNotificationAt < this.#config.debounceMs) return false;
+    this.#lastNotificationAt = now;
 
     try {
       this.#runtime.spawn(buildPlayCommand(resolveSoundPath(this.#extensionDir, sound.file)));

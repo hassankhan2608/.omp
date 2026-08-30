@@ -15,8 +15,6 @@ lsp:
   formatOnWrite: true
 defaultThinkingLevel: auto
 hideThinkingBlock: false
-extensions:
-  - ~/.config/omp/agent/extensions/terminal-bell/src/terminal-bell.ts
 disabledExtensions:
   - extension-module:bash-policy
 github:

@@ -63,10 +63,6 @@ export function registerBellHandlers(
     if (bellEvent) await (await notifier)?.notify(bellEvent);
   });
 
-  pi.on("tool_approval_requested", async (_event, ctx) => {
-    if (!ctx.hasUI) return;
-    await (await notifier)?.notify("approval.requested");
-  });
 }
 
 export default function terminalBell(pi: ExtensionAPI): void {

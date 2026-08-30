@@ -468,6 +468,25 @@ describe("configuration and shell safety", () => {
     expect((await analyzeBash("rm -rf /")).catastrophicReason).toContain("Recursive forced deletion");
   });
 
+  test("treats curl request bodies as data while preserving real file operands", async () => {
+    const request = await analyzeBash(
+      "curl -sS -m 90 -w '\\nHTTP %{http_code}\\n' https://api.example.test/v1/chat "
+      + "-H 'Authorization: Bearer placeholder' -H 'Content-Type: application/json' "
+      + "-d '{\"model\":\"router/fusion-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"OK\"}],\"max_tokens\":10}'",
+    );
+    expect(request.paths).toEqual([]);
+
+    expect((await analyzeBash("curl -o /tmp/response.json https://example.test")).paths)
+      .toEqual(["/tmp/response.json"]);
+    expect((await analyzeBash("curl --upload-file ./artifact.tgz https://example.test")).paths)
+      .toEqual(["./artifact.tgz"]);
+    expect((await analyzeBash("curl --data-binary @./request.json https://example.test")).paths)
+      .toEqual(["./request.json"]);
+    expect((await analyzeBash("curl --cert ~/.config/client.pem --key ~/.config/client.key https://example.test")).paths)
+      .toEqual(["~/.config/client.pem", "~/.config/client.key"]);
+    expect((await analyzeBash("curl file:///etc/passwd")).paths).toEqual(["/etc/passwd"]);
+  });
+
   test("forces approval for semantic write, execution, and boundary-crossing flags", async () => {
     const unsafe = [
       "find . -delete",

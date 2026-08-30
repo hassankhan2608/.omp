@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { Language, Parser, type Node } from "web-tree-sitter";
 import { LEVEL_ORDER, type PermissionLevel } from "./config";
 
@@ -790,11 +791,91 @@ function looksLikePath(word: string): boolean {
     || word.includes("/") || word.startsWith(".") || SENSITIVE_BASENAMES[basename] === true;
 }
 
+const CURL_FILE_OPTIONS: Record<string, true> = {
+  "-o": true,
+  "--output": true,
+  "-T": true,
+  "--upload-file": true,
+  "-E": true,
+  "--cert": true,
+  "--key": true,
+  "--cacert": true,
+  "--capath": true,
+  "-c": true,
+  "--cookie-jar": true,
+  "-K": true,
+  "--config": true,
+  "--netrc-file": true,
+  "-D": true,
+  "--dump-header": true,
+  "--trace": true,
+  "--trace-ascii": true,
+  "--output-dir": true,
+};
+
+const CURL_AT_FILE_OPTIONS: Record<string, true> = {
+  "-d": true,
+  "--data": true,
+  "--data-ascii": true,
+  "--data-binary": true,
+  "--data-urlencode": true,
+  "--json": true,
+  "-F": true,
+  "--form": true,
+};
+
+function curlEmbeddedFile(value: string): string | undefined {
+  const marker = /(?:^|=)(?:@|<)(.+)$/.exec(value) ?? /^(?:@|<)(.+)$/.exec(value);
+  const path = marker?.[1];
+  return path && path !== "-" ? path : undefined;
+}
+
+/** Curl has data-bearing options whose values commonly contain `/`; only its file-bearing options are paths. */
+function curlPaths(arguments_: readonly string[]): string[] {
+  const paths: string[] = [];
+  for (let index = 0; index < arguments_.length; index++) {
+    const argument = arguments_[index]!;
+    if (argument.startsWith("file://")) {
+      try {
+        paths.push(fileURLToPath(argument));
+      } catch {
+        // Malformed file URLs remain policy-visible through the command text.
+      }
+      continue;
+    }
+    const equals = argument.indexOf("=");
+    const option = equals > 0 ? argument.slice(0, equals) : argument;
+    const inlineValue = equals > 0 ? argument.slice(equals + 1) : undefined;
+    if (CURL_FILE_OPTIONS[option]) {
+      const value = inlineValue ?? arguments_[++index];
+      if (value && value !== "-") paths.push(value);
+      continue;
+    }
+    if (CURL_AT_FILE_OPTIONS[option]) {
+      const value = inlineValue ?? arguments_[++index];
+      const path = value ? curlEmbeddedFile(value) : undefined;
+      if (path) paths.push(path);
+      continue;
+    }
+    if (/^-[oTEcKD].+/.test(argument)) {
+      const value = argument.slice(2);
+      if (value && value !== "-") paths.push(value);
+      continue;
+    }
+    if (/^-d.+/.test(argument)) {
+      const path = curlEmbeddedFile(argument.slice(2));
+      if (path) paths.push(path);
+    }
+  }
+  return paths;
+}
+
 function commandPaths(unit: BashCommandUnit): string[] {
   if (!unit.executable) return [];
   if (unit.executable === "sed") return sedOperands(unit.arguments).paths;
   if (unit.executable === "awk") return awkOperands(unit.arguments).paths;
   if (["grep", "rg", "ag", "ack"].includes(unit.executable)) return textSearchPaths(unit.arguments);
+  if (unit.executable === "curl") return curlPaths(unit.arguments);
   const positional = unit.arguments.filter((word) => !word.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
   const optionValues = unit.arguments.flatMap((word) => {
     const match = /^--[^=]+=(.+)$/.exec(word);

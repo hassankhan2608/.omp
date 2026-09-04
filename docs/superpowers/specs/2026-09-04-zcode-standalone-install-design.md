@@ -70,29 +70,41 @@ artifact for source and build output to drift apart.
 
 ## Dependency Contract
 
-True runtime dependencies stay under `dependencies`:
+True third-party runtime dependencies stay under `dependencies`:
 
 - `happy-dom` pinned exactly to `20.11.6`, matching upstream ZCode.
 - `undici`, used by the runtime boundary.
 
-Packages supplied by OMP are optional peers and development dependencies:
+OMP packages stay under `peerDependencies`, but their optionality follows the
+actual loader boundary rather than treating every host package alike:
 
-- `@oh-my-pi/pi-ai`
-- `@oh-my-pi/pi-catalog`
-- `@oh-my-pi/pi-coding-agent`
+- `@oh-my-pi/pi-catalog` is a **required peer**. The extension value-imports
+  `buildModel`, and OMP's legacy compatibility loader does not host-rewrite
+  `pi-catalog`. Bun therefore must materialize this peer in the plugin store.
+- `@oh-my-pi/pi-ai` is an optional peer. The extension value-imports
+  `streamAnthropic` and `ProviderHttpError`, but OMP explicitly host-rewrites
+  `pi-ai` during extension validation/loading.
+- `@oh-my-pi/pi-coding-agent` is an optional peer and development dependency.
+  Its extension API imports are type-only, and OMP also host-rewrites it.
 
-Optional peers express the host contract without causing a private duplicate
-OMP runtime to be bundled into the plugin. Matching development dependencies
-provide types and local tests. The peer range must cover the verified OMP
-runtime without silently accepting incompatible major versions.
+All three remain matching development dependencies for local typechecking and
+tests. This is the minimum standalone graph: it follows the working
+`guyijie1211/omp-qoder-extension` required-peer pattern for `pi-catalog`
+without making the entire coding-agent/native graph required.
+
+The exact-SHA RED at standalone commit `47ee769` proved this distinction:
+marking `pi-catalog` optional caused PluginManager validation to fail with
+`Cannot find package '@oh-my-pi/pi-catalog'`. A direct Bun Git install likewise
+omitted every optional peer. Removing only `pi-catalog` from
+`peerDependenciesMeta` is the corrective change.
 
 ## Install Data Flow
 
 1. OMP resolves `github:hassankhan2608/omp-zcode-provider[#ref]`.
 2. PluginManager materializes the Git source in OMP's plugin store.
 3. PluginManager runs Bun dependency installation at package root.
-4. Bun installs pinned `happy-dom` and `undici`; OMP host packages resolve
-   through the optional-peer contract.
+4. Bun installs pinned `happy-dom` and `undici`, plus the required
+   `pi-catalog` peer; OMP supplies the optional host-rewritten packages.
 5. PluginManager imports `src/extension.ts` to validate it.
 6. Only after successful import does the installed plugin become active.
 7. Any failure rolls back rather than leaving a half-installed extension.

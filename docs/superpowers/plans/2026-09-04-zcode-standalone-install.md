@@ -15,7 +15,7 @@
 - The standalone repository is public by explicit user decision; do not add a license or assert rights absent from upstream `TriDefender/zcode-api`.
 - `happy-dom` remains pinned exactly to `20.11.6`; no independent upgrade.
 - `undici` remains a runtime dependency.
-- `@oh-my-pi/pi-ai`, `@oh-my-pi/pi-catalog`, and `@oh-my-pi/pi-coding-agent` are optional peers plus matching development dependencies, never bundled runtime dependencies.
+- `@oh-my-pi/pi-catalog` is a required peer because OMP does not host-rewrite it; `@oh-my-pi/pi-ai` and `@oh-my-pi/pi-coding-agent` are optional peers. All three remain matching development dependencies.
 - Keep vendored files and `PINNED_UPSTREAM_REF = "5fcb778"` parity semantics unchanged.
 - Native OMP installation only: no copy hook, proxy, daemon, SQLite write, or second protocol layer.
 - The standalone repository becomes the sole provider source after cutover; no mirror, alias, submodule, or deprecated nested path remains.
@@ -214,7 +214,7 @@ Do not weaken the smoke to accept a nested package or pre-install dependencies m
 
 **Interfaces:**
 - Consumes: OMP 18.1.x host APIs and Bun's Git-package installation.
-- Produces: root `omp.extensions = ["./src/extension.ts"]`, runtime `happy-dom`/`undici`, and optional OMP peer dependencies.
+- Produces: root `omp.extensions = ["./src/extension.ts"]`, runtime `happy-dom`/`undici`, required `pi-catalog` peer, and optional `pi-ai`/`pi-coding-agent` peers.
 
 - [ ] **Step 1: Rewrite only dependency ownership and package metadata**
 
@@ -248,7 +248,6 @@ Set the relevant `package.json` fields to:
   },
   "peerDependenciesMeta": {
     "@oh-my-pi/pi-ai": { "optional": true },
-    "@oh-my-pi/pi-catalog": { "optional": true },
     "@oh-my-pi/pi-coding-agent": { "optional": true }
   },
   "devDependencies": {
@@ -264,7 +263,7 @@ Set the relevant `package.json` fields to:
 }
 ```
 
-`private: true` prevents accidental npm publication; it does not block OMP's Git installation.
+`private: true` prevents accidental npm publication; it does not block OMP's Git installation. `pi-catalog` deliberately has no `peerDependenciesMeta` entry: the exact-SHA RED at `47ee769` proved OMP does not host-rewrite it, while Bun installs a required peer when the plugin store lacks one. Qoder and two other provider packages use this required-peer pattern for runtime `pi-catalog` imports.
 
 - [ ] **Step 2: Regenerate and freeze the lockfile**
 
@@ -277,7 +276,7 @@ bun install
 bun install --frozen-lockfile
 ```
 
-Expected: both installs succeed; `happy-dom@20.11.6` and `undici` resolve from runtime dependencies while all three OMP packages remain available for development.
+Expected: both installs succeed; `happy-dom@20.11.6` and `undici` resolve as runtime dependencies, required peer `pi-catalog` is materialized by Bun, and optional host-rewritten OMP packages remain available for development.
 
 - [ ] **Step 3: Document the supported install command**
 
